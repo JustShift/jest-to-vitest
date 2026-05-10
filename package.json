@@ -34,7 +34,7 @@
     }
   },
   "bin": {
-    "jest-to-vitest": "./dist/cli.js"
+    "jest-to-vitest": "dist/cli.js"
   },
   "files": [
     "dist",
