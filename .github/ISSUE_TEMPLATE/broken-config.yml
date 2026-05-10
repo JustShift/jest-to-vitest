@@ -1,0 +1,43 @@
+name: Broken config conversion
+description: A jest.config that the converter handles incorrectly.
+title: "[broken] "
+labels: ["bug", "broken-config"]
+body:
+  - type: textarea
+    id: input
+    attributes:
+      label: Input — your jest.config
+      description: Paste the exact source. Include the file extension (.js / .ts / .cjs / .mjs).
+      render: javascript
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual output
+      description: What the converter produced.
+      render: typescript
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected output
+      description: What you'd expect a correct conversion to look like.
+      render: typescript
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `npx @shiftkit/jest-to-vitest --help` first line, or the npm version installed.
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Anything else relevant — monorepo? Vue? CRA? ts-jest preset?
+    validations:
+      required: false

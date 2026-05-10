@@ -1,0 +1,72 @@
+{
+  "name": "@shiftkit/jest-to-vitest",
+  "version": "0.1.0",
+  "description": "Convert a Jest config to a Vitest config. AST-based, framework-aware, with actionable warnings.",
+  "keywords": [
+    "jest",
+    "vitest",
+    "migration",
+    "codemod",
+    "config",
+    "converter",
+    "ast",
+    "babel"
+  ],
+  "license": "MIT",
+  "author": "JustShift",
+  "homepage": "https://github.com/JustShift/jest-to-vitest#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JustShift/jest-to-vitest.git"
+  },
+  "bugs": {
+    "url": "https://github.com/JustShift/jest-to-vitest/issues"
+  },
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "bin": {
+    "jest-to-vitest": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "dependencies": {
+    "@babel/generator": "^7.29.1",
+    "@babel/parser": "^7.29.2",
+    "@babel/traverse": "^7.29.0",
+    "@babel/types": "^7.29.0"
+  },
+  "devDependencies": {
+    "@types/babel__generator": "^7.27.0",
+    "@types/babel__traverse": "^7.28.0",
+    "@types/node": "^20",
+    "tsup": "^8",
+    "typescript": "^5",
+    "vitest": "^4.1.5"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
