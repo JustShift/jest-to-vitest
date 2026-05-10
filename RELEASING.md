@@ -169,10 +169,43 @@ Deprecation prints a warning on install but doesn't break existing lockfiles. Th
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `ci.yml` | Push or PR to any branch | Lint (`tsc --noEmit`) + tests on Node 18, 20, 22 + build |
-| `release.yml` | Push of a `v*` tag | Tests + build + `npm publish` via OIDC |
+| `ci.yml` | Push or PR to any branch | Lint (`tsc --noEmit`) + tests on Node 20, 22 + build |
+| `release.yml` | Push of a `v*` tag | Tests + build + `npm publish --provenance` via OIDC on Node 24 |
 
-If `ci.yml` fails on a PR, do not merge. If `release.yml` fails, the tag is created but no publish happened — investigate the run, push a fix, then bump and re-tag (e.g. `v0.1.2` after a failed `v0.1.1`).
+If `ci.yml` fails on a PR, do not merge. If `release.yml` fails, the tag is created but no publish happened — investigate the run, push a fix, then bump and re-tag (do **not** reuse the failed tag; bump to the next patch).
+
+## Release pipeline gotchas (lessons learned)
+
+These were discovered during the v0.1.0 → v0.1.3 release setup. Don't reintroduce them.
+
+### Use Node 24+ in `release.yml`, not in `ci.yml`
+
+OIDC trusted publishing requires npm ≥ 11.5.1. Node 22 ships with npm 10.x; Node 24 ships with npm 11+. Pinning the release workflow to Node 24 avoids the need to upgrade npm in CI (which is unreliable — see next gotcha).
+
+`ci.yml` stays on Node 20 and 22 for broader **consumer** compatibility — the package itself supports Node ≥20.
+
+### Don't run `npm install -g npm@latest` in GitHub Actions
+
+There is a long-standing npm self-upgrade corruption bug on hosted runners: the upgrade deletes `promise-retry` mid-install and leaves npm in a broken state, killing the workflow with `MODULE_NOT_FOUND`. Bump the Node version instead.
+
+### Always pass `--provenance` to `npm publish`
+
+npm docs claim provenance is automatic with trusted publishing, but in practice the npm CLI sometimes does not request the OIDC token unless `--provenance` is explicit. Without it, the publish silently falls back to anonymous and fails with a confusing `404 Not Found` error.
+
+### Don't set `NODE_AUTH_TOKEN` in the publish step
+
+`actions/setup-node@v4` with `registry-url` already wires up `_authToken` in `.npmrc`. Setting `env: NODE_AUTH_TOKEN: ''` (or any empty/placeholder value) actively breaks OIDC because npm tries to use the empty token instead of requesting an OIDC one. Leave the env block off the `npm publish` step entirely.
+
+### Failed-tag housekeeping
+
+If a release tag fails to publish, **bump to the next patch version** rather than re-tagging the same version. Re-tagging requires force-pushing tags, which is messy and confusing in `git log`. Cost is just a wasted patch number — a tiny price.
+
+If you accumulate orphan failed tags, prune them with:
+
+```bash
+git tag -d v0.1.1
+git push origin :refs/tags/v0.1.1
+```
 
 ## First-time setup checklist (for new maintainers)
 
