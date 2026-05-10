@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 — 2026-05-10
+## 0.1.4 — 2026-05-10
 
 - chore: relicense from MIT to Apache-2.0 (stronger patent grant; SPDX-clean field for npm)
 
