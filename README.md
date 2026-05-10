@@ -12,6 +12,16 @@ npm install -D @shiftkit/jest-to-vitest
 npx @shiftkit/jest-to-vitest jest.config.js
 ```
 
+### Supply-chain hygiene (recommended)
+
+Add a 7-day quarantine on new npm versions to your `.npmrc`:
+
+```
+min-release-age=7
+```
+
+This would have blocked every major npm supply-chain attack in 2026 (Axios, Trivy, LiteLLM, Telnyx, Checkmarx) — malicious versions are typically caught and unpublished within hours. Releases of this package are published from GitHub Actions via [npm Trusted Publishing](https://docs.npmjs.com/trusted-publishers/) (OIDC, no long-lived tokens), and every release ships with a provenance attestation.
+
 ## CLI
 
 ```bash
