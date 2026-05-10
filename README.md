@@ -97,6 +97,13 @@ Library cleanup behavior under `globals: true`.
 
 Try it without installing: <https://shiftkit.dev> *(coming soon)*
 
+## Deeper docs
+
+- [`docs/MIGRATION-GUIDE.md`](docs/MIGRATION-GUIDE.md) — comprehensive Jest → Vitest migration blueprint, edge cases, Vitest 4 breaking changes
+- [`docs/SUPPORT-CHECKLIST.md`](docs/SUPPORT-CHECKLIST.md) — audit of which Jest fields the converter handles, with status per field
+- [`docs/RE-EVALUATION-FINDINGS.md`](docs/RE-EVALUATION-FINDINGS.md) — working notes from the most recent converter pass against current Vitest docs
+- [`RELEASING.md`](RELEASING.md) — branching, versioning, hotfix, and release pipeline notes
+
 ## Development
 
 ```bash
