@@ -12,7 +12,7 @@
     "ast",
     "babel"
   ],
-  "license": "MIT",
+  "license": "Apache-2.0",
   "author": "JustShift",
   "homepage": "https://github.com/JustShift/jest-to-vitest#readme",
   "repository": {
