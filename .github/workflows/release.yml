@@ -23,8 +23,10 @@ jobs:
           node-version: 22
           cache: npm
           registry-url: https://registry.npmjs.org
+      # OIDC Trusted Publishing requires npm >= 11.5.1; Node 22 ships with npm 10.x.
+      - run: npm install -g npm@latest
       - run: npm ci
       - run: npm test
       - run: npm run build
-      # With Trusted Publishing, --provenance is automatic and no token is needed.
-      - run: npm publish --access public
+      # --provenance forces npm CLI to request the OIDC token from GitHub Actions.
+      - run: npm publish --provenance --access public
