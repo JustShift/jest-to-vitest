@@ -26,6 +26,7 @@ export type OutputMode = 'standalone' | 'merge';
 
 export interface ConvertOptions {
   mode?: OutputMode;
+  format?: boolean;
 }
 
 export interface ConversionFlags {
@@ -35,6 +36,7 @@ export interface ConversionFlags {
   needsJsdom: boolean;
   needsHappyDom: boolean;
   needsTsconfigPaths: boolean;
+  needsSvgr: boolean;
   usesGlobalsTrue: boolean;
 }
 
@@ -48,12 +50,14 @@ interface ConfigSection {
   scalars: Map<string, string>;
   arrays: Map<string, string[]>;
   raw: string[];
+  noteFor: Map<string, string>;
 }
 
 const newSection = (): ConfigSection => ({
   scalars: new Map(),
   arrays: new Map(),
   raw: [],
+  noteFor: new Map(),
 });
 
 const ASSET_EXTS = ['gif', 'png', 'jpg', 'jpeg', 'svg', 'webp', 'avif', 'ico'];
@@ -73,6 +77,7 @@ export function convertJestToVitest(
   options: ConvertOptions = {}
 ): ConversionResult {
   const mode: OutputMode = options.mode ?? 'standalone';
+  const format: boolean = options.format ?? true;
   const warnings: Warning[] = [];
   const seenWarnings = new Set<string>();
 
@@ -274,6 +279,7 @@ export function convertJestToVitest(
   let selectedCoverageProvider: 'v8' | 'istanbul' | 'custom' | null = null;
   let needsJsdom = false;
   let needsHappyDom = false;
+  let needsSvgr = false;
   let usesGlobalsTrue = false;
   let hasMonorepoSignal = false;
 
@@ -381,6 +387,7 @@ export function convertJestToVitest(
         if (!test.arrays.has('include')) {
           appendArray(test, 'include', `['**/*.{test,spec}.{ts,tsx,js,jsx}']`);
         }
+        test.noteFor.set('include', `VERIFY: testRegex ${source} was converted to default Vitest glob — verify file matching`);
         test.raw.push(`// NOTE: testRegex was ${source}. Verify file matching against the default Vitest glob.`);
         warnVerify(`testRegex was converted to the default Vitest glob. Verify file matching.`);
         break;
@@ -436,6 +443,7 @@ export function convertJestToVitest(
       case 'testURL': {
         const urlSrc = source;
         setScalar(test, 'environmentOptions', `{ jsdom: { url: ${urlSrc} } }`);
+        test.noteFor.set('environmentOptions', `VERIFY: from testURL — merge manually if you also use testEnvironmentOptions`);
         warnVerify(
           `testURL was migrated to environmentOptions.jsdom.url. If you also have testEnvironmentOptions, merge them manually.`
         );
@@ -443,10 +451,32 @@ export function convertJestToVitest(
       }
       case 'testTimeout':
       case 'maxConcurrency':
-      case 'globalSetup':
       case 'silent':
         setScalar(test, key, source);
         break;
+      case 'globalSetup': {
+        setScalar(test, key, source);
+        const checkExt = (p: string) => {
+          if (/\.(js|cjs)$/.test(p)) {
+            test.noteFor.set(
+              'globalSetup',
+              `VERIFY: '${p}' likely uses module.exports — Vitest expects ESM default export`
+            );
+            warnVerify(
+              `globalSetup '${p}' uses a CommonJS extension (.js/.cjs). Vitest expects an ESM default export, or named 'setup'/'teardown' exports. Convert 'module.exports = fn' to 'export default fn' (or rename to .mjs/.ts).`
+            );
+            return true;
+          }
+          return false;
+        };
+        if (t.isStringLiteral(value)) checkExt(value.value);
+        else if (t.isArrayExpression(value)) {
+          value.elements.forEach((el) => {
+            if (t.isStringLiteral(el)) checkExt(el.value);
+          });
+        }
+        break;
+      }
       case 'slowTestThreshold':
         if (t.isNumericLiteral(value)) {
           setScalar(test, 'slowTestThreshold', String(value.value * 1000));
@@ -510,6 +540,10 @@ export function convertJestToVitest(
         appendArray(test, 'setupFiles', source);
         if (key === 'setupFilesAfterEnv') {
           hasSetupFilesAfterEnv = true;
+          test.noteFor.set(
+            'setupFiles',
+            `VERIFY: includes setupFilesAfterEnv — runs BEFORE tests in Vitest (unlike Jest); move framework-dependent calls accordingly`
+          );
           warnVerify(
             `setupFilesAfterEnv runs after the test framework in Jest; in Vitest setupFiles runs before tests. Move framework-dependent calls (e.g. expect.extend) into a setup that imports vitest first.`
           );
@@ -600,6 +634,7 @@ export function convertJestToVitest(
         break;
       case 'moduleDirectories':
         setScalar(test, 'deps', `{ moduleDirectories: ${source} }`);
+        test.noteFor.set('deps', `VERIFY: source aliasing belongs in resolve.alias; this controls mock/dependency resolution only`);
         warnVerify(
           `moduleDirectories was migrated to test.deps.moduleDirectories. Verify if you intended source resolution (use resolve.alias) versus mock/dependency resolution (test.deps.moduleDirectories).`
         );
@@ -665,6 +700,7 @@ export function convertJestToVitest(
       case 'resetMocks':
         hasMockingSignal = true;
         setScalar(test, 'mockReset', source);
+        test.noteFor.set('mockReset', `VERIFY: mapped from Jest resetMocks — verify mock implementation reset semantics`);
         warnVerify(`resetMocks was mapped to Vitest mockReset. Verify mock implementation reset behavior on first run.`);
         break;
       case 'fakeTimers':
@@ -754,6 +790,7 @@ export function convertJestToVitest(
       case 'reporters':
         if (t.isArrayExpression(value)) {
           appendArray(test, 'reporters', source);
+          test.noteFor.set('reporters', `VERIFY: Jest and Vitest built-in reporter names differ (default/verbose/dot/json/junit/tap/html)`);
           warnVerify(
             `reporters were copied verbatim. Jest and Vitest built-in reporter names differ (e.g. 'default', 'verbose', 'dot', 'json', 'junit', 'tap', 'html').`
           );
@@ -988,10 +1025,10 @@ export function convertJestToVitest(
   const defineEntries = Array.from(define.entries()).map(([k, v]) => `${quoteKey(k)}: ${v}`);
 
   // Build coverage block (only if any coverage entries).
-  const coverageLines = renderSection(coverage);
+  const coverageLines = renderSection(coverage, '  ', format);
   if (coverageLines.length > 0) {
     test.raw.push('coverage: {');
-    coverageLines.forEach((line) => test.raw.push(`  ${line}`));
+    coverageLines.forEach((line) => test.raw.push(line));
     test.raw.push('},');
   }
 
@@ -1007,7 +1044,7 @@ export function convertJestToVitest(
   }
 
   // Compose root test block.
-  const testLines = renderSection(test);
+  const testLines = renderSection(test, '    ', format);
 
   // Compose imports.
   const imports: string[] = [];
@@ -1036,18 +1073,20 @@ export function convertJestToVitest(
     if (resolveAlias.size > 0) {
       lines.push(`    alias: {`);
       resolveAlias.forEach((target, alias) => {
-        lines.push(`      ${quoteKey(alias)}: ${target},`);
+        const formattedTarget = format ? prettyFormat(target, '      ') : target;
+        lines.push(`      ${quoteKey(alias)}: ${formattedTarget},`);
       });
       lines.push(`    },`);
     }
     if (resolveExtensions.length > 0) {
-      lines.push(`    extensions: [${resolveExtensions.map((ext) => JSON.stringify(ext.startsWith('.') ? ext : `.${ext}`)).join(', ')}],`);
+      const ext = resolveExtensions.map((e) => `'${e.startsWith('.') ? e : `.${e}`}'`).join(', ');
+      lines.push(`    extensions: [${ext}],`);
     }
     lines.push(`  },`);
   }
   if (testLines.length > 0) {
     lines.push(`  test: {`);
-    testLines.forEach((line) => lines.push(`    ${line}`));
+    testLines.forEach((line) => lines.push(line));
     lines.push(`  },`);
   }
   lines.push(`});`);
@@ -1065,6 +1104,7 @@ export function convertJestToVitest(
   if (needsJsdom) tailoredNextSteps.push(`npm install -D jsdom`);
   if (needsHappyDom) tailoredNextSteps.push(`npm install -D happy-dom`);
   if (needsTsconfigPaths) tailoredNextSteps.push(`npm install -D vite-tsconfig-paths`);
+  if (needsSvgr) tailoredNextSteps.push(`npm install -D vite-plugin-svgr`);
   tailoredNextSteps.push(`Update package.json scripts: "test": "vitest"`);
   if (usesGlobalsTrue) {
     tailoredNextSteps.push(`Add "vitest/globals" to compilerOptions.types in tsconfig.json`);
@@ -1093,6 +1133,7 @@ export function convertJestToVitest(
       needsJsdom,
       needsHappyDom,
       needsTsconfigPaths,
+      needsSvgr,
       usesGlobalsTrue,
     },
   };
@@ -1144,9 +1185,23 @@ export function convertJestToVitest(
       const assetMatch = ASSET_EXTS.some((ext) => aliasKey.includes(`\\.(${ext})`) || aliasKey.includes(`|${ext}`)) ||
         /\\\.\((?:gif|png|jpg|jpeg|svg|webp|avif|ico)\b/.test(aliasKey);
       if (assetMatch) {
-        warnVerify(
-          `Image/asset stub for ${aliasKey} detected. Vite serves these as URLs by default; remove the stub or replace with vite-plugin-svgr / a custom plugin for inline SVGs.`
-        );
+        const isSvgStub = /svg/i.test(aliasKey);
+        if (isSvgStub) {
+          needsSvgr = true;
+          if (!rootImports.some((line) => line.includes(`from 'vite-plugin-svgr'`))) {
+            rootImports.push(`import svgr from 'vite-plugin-svgr';`);
+          }
+          if (!rootPlugins.includes('svgr()')) {
+            rootPlugins.push('svgr()');
+          }
+          warnInfo(
+            `SVG stub for ${aliasKey} replaced with vite-plugin-svgr plugin. Import SVGs as React components via './foo.svg?react'. The install step is added to the next-steps block.`
+          );
+        } else {
+          warnVerify(
+            `Image/asset stub for ${aliasKey} detected. Vite serves these as URLs by default; remove the stub or replace with a custom plugin if needed.`
+          );
+        }
         return;
       }
 
@@ -1258,6 +1313,7 @@ export function convertJestToVitest(
     }
 
     setScalar(coverage, 'thresholds', `{ ${thresholdEntries.join(', ')} }`);
+    coverage.noteFor.set('thresholds', `VERIFY: V8 AST remapping in Vitest 4 may shift previously-passing thresholds — re-baseline${sawPathThreshold ? '; path thresholds: Vitest keeps matching files in global thresholds' : ''}`);
 
     if (sawGlobal) {
       warnInfo(`coverageThreshold.global was unwrapped into Vitest coverage.thresholds.`);
@@ -1389,12 +1445,15 @@ function emptyFlags(): ConversionFlags {
     needsJsdom: false,
     needsHappyDom: false,
     needsTsconfigPaths: false,
+    needsSvgr: false,
     usesGlobalsTrue: false,
   };
 }
 
 function quoteKey(key: string): string {
-  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) ? key : JSON.stringify(key);
+  if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key)) return key;
+  if (!key.includes("'") && !/[\\\n\r\t]/.test(key)) return `'${key}'`;
+  return JSON.stringify(key);
 }
 
 function unpackArrayLiteral(source: string): string[] {
@@ -1434,17 +1493,136 @@ function unpackArrayLiteral(source: string): string[] {
   return parts;
 }
 
-function renderSection(section: ConfigSection): string[] {
+function renderSection(section: ConfigSection, indent: string, format: boolean): string[] {
   const lines: string[] = [];
+  const emit = (full: string) => {
+    full.split('\n').forEach((line) => lines.push(line));
+  };
   section.scalars.forEach((value, key) => {
-    lines.push(`${quoteKey(key)}: ${value},`);
+    const formatted = format ? prettyFormat(value, indent) : value;
+    const note = section.noteFor.get(key);
+    const trailing = note ? ` // ${note}` : '';
+    emit(`${indent}${quoteKey(key)}: ${formatted},${trailing}`);
   });
   section.arrays.forEach((items, key) => {
     if (items.length === 0) return;
-    lines.push(`${quoteKey(key)}: [${items.join(', ')}],`);
+    const note = section.noteFor.get(key);
+    const trailing = note ? ` // ${note}` : '';
+    const childIndent = indent + '  ';
+    const formattedItems = format ? items.map((it) => prettyFormat(it, childIndent)) : items;
+    const inline = `[${formattedItems.join(', ')}]`;
+    const needsMultiLine =
+      format &&
+      (inline.length > 70 ||
+        items.length > 4 ||
+        formattedItems.some((it) => it.includes('\n')));
+    if (needsMultiLine) {
+      lines.push(`${indent}${quoteKey(key)}: [`);
+      formattedItems.forEach((it) => emit(`${childIndent}${it},`));
+      lines.push(`${indent}],${trailing}`);
+    } else {
+      emit(`${indent}${quoteKey(key)}: ${inline},${trailing}`);
+    }
   });
-  lines.push(...section.raw);
+  section.raw.forEach((rawLine) => emit(`${indent}${rawLine}`));
   return lines;
+}
+
+function prettyFormat(code: string, currentIndent: string): string {
+  if (!code) return code;
+  // Skip values that are obviously bare literals/identifiers — no need to reparse.
+  if (/^(?:true|false|null|undefined|-?\d+(?:\.\d+)?|[A-Za-z_$][A-Za-z0-9_$]*)$/.test(code)) return code;
+  let expr: t.Expression;
+  try {
+    const ast = parser.parse(`(${code})`, {
+      sourceType: 'module',
+      plugins: ['typescript', 'jsx'],
+    });
+    const stmt = ast.program.body[0];
+    if (!t.isExpressionStatement(stmt)) return code;
+    expr = stmt.expression;
+  } catch {
+    return code;
+  }
+  return formatAstNode(expr, currentIndent);
+}
+
+function formatAstNode(node: t.Node, currentIndent: string): string {
+  const childIndent = currentIndent + '  ';
+  if (t.isArrayExpression(node)) {
+    if (node.elements.length === 0) return '[]';
+    const items = node.elements
+      .filter((e): e is t.Expression | t.SpreadElement => e != null)
+      .map((e) => formatAstNode(e, childIndent));
+    const inline = `[${items.join(', ')}]`;
+    if (inline.length <= 70 && !inline.includes('\n')) return inline;
+    return `[\n${items.map((s) => `${childIndent}${s}`).join(',\n')},\n${currentIndent}]`;
+  }
+  if (t.isObjectExpression(node)) {
+    const entries: string[] = [];
+    for (const p of node.properties) {
+      if (t.isSpreadElement(p)) {
+        entries.push(`...${formatAstNode(p.argument, childIndent)}`);
+        continue;
+      }
+      if (t.isObjectMethod(p)) {
+        entries.push(generate(p, { compact: false }).code);
+        continue;
+      }
+      if (!t.isObjectProperty(p)) continue;
+      const keyName =
+        t.isIdentifier(p.key)
+          ? p.key.name
+          : t.isStringLiteral(p.key)
+          ? p.key.value
+          : t.isNumericLiteral(p.key)
+          ? String(p.key.value)
+          : generate(p.key).code;
+      const formattedKey = p.computed ? `[${generate(p.key).code}]` : quoteKey(keyName);
+      const formattedValue = formatAstNode(p.value as t.Node, childIndent);
+      entries.push(`${formattedKey}: ${formattedValue}`);
+    }
+    if (entries.length === 0) return '{}';
+    const inline = `{ ${entries.join(', ')} }`;
+    if (inline.length <= 70 && !inline.includes('\n')) return inline;
+    return `{\n${entries.map((e) => `${childIndent}${e}`).join(',\n')},\n${currentIndent}}`;
+  }
+  if (t.isStringLiteral(node)) {
+    const stripped = node.value.replace(/<rootDir>\/?/g, './');
+    if (!stripped.includes("'") && !/[\\\n\r\t]/.test(stripped)) {
+      return `'${stripped}'`;
+    }
+    return JSON.stringify(stripped);
+  }
+  if (t.isNumericLiteral(node)) return String(node.value);
+  if (t.isBooleanLiteral(node)) return String(node.value);
+  if (t.isNullLiteral(node)) return 'null';
+  if (t.isIdentifier(node)) return node.name;
+  if (t.isCallExpression(node)) {
+    const callee = formatAstNode(node.callee, currentIndent);
+    const argStrs = node.arguments.map((a) => formatAstNode(a as t.Node, childIndent));
+    const inline = `${callee}(${argStrs.join(', ')})`;
+    if (inline.length <= 70 && !inline.includes('\n')) return inline;
+    return `${callee}(\n${argStrs.map((a) => `${childIndent}${a}`).join(',\n')},\n${currentIndent})`;
+  }
+  if (t.isMemberExpression(node)) {
+    const obj = formatAstNode(node.object, currentIndent);
+    if (node.computed) {
+      const prop = formatAstNode(node.property as t.Node, currentIndent);
+      return `${obj}[${prop}]`;
+    }
+    const prop = t.isIdentifier(node.property)
+      ? node.property.name
+      : formatAstNode(node.property as t.Node, currentIndent);
+    return `${obj}.${prop}`;
+  }
+  if (t.isTemplateLiteral(node)) {
+    return generate(node, { jsescOption: { quotes: 'single' } }).code;
+  }
+  return generate(node, { compact: false, jsescOption: { quotes: 'single' } })
+    .code.replace(/<rootDir>\/?/g, './')
+    .replace(/\n\s*/g, ' ')
+    .trim();
 }
 
 // Extract package names from common Jest transformIgnorePatterns regex shapes:

@@ -84,6 +84,7 @@ Legend:
 - `[x] Supported` Relative aliases are rewritten with `path.resolve(__dirname, ...)` and `import path from 'node:path'` is auto-added.
 - `[x] Supported` CSS file stubs are detected and emit `test.css: false` with a verify warning.
 - `[x] Supported` Image/asset stubs detected across `gif|png|jpg|jpeg|svg|webp|avif|ico` with verify warning.
+- `[x] Supported` SVG-specific stubs emit `import svgr from 'vite-plugin-svgr'` + `plugins: [svgr()]` + tailored install step (instead of just a warning). Flag `needsSvgr` set.
 - `[x] Supported` Font stubs detected across `woff|woff2|eot|ttf|otf` with info warning.
 - `[x] Supported` Alias cleanup handles `^@/(.*)$` and `<rootDir>/src/$1` patterns.
 - `[x] Supported` `moduleDirectories` -> `test.deps.moduleDirectories` with verify warning explaining source-vs-mock distinction.
@@ -91,7 +92,7 @@ Legend:
 - `[x] Supported` `moduleFileExtensions` -> `resolve.extensions` (separate from `resolve.alias`).
 - `[x] Supported` `resolver` emits manual warning.
 - `[x] Supported` `unmockedModulePathPatterns` emits manual warning.
-- `[ ] Unsupported` Plugin output for file stubs such as `vite-plugin-svgr` or `assetsPlugin`.
+- `[x] Supported` Plugin output for SVG stubs (`vite-plugin-svgr` import + plugin + install step).
 
 ## Setup And Teardown Fields
 
@@ -99,7 +100,7 @@ Legend:
 - `[x] Supported` `setupFilesAfterEnv` -> `test.setupFiles`.
 - `[x] Supported` `setupFiles` and `setupFilesAfterEnv` from the same input merge into one `test.setupFiles` array.
 - `[x] Supported` `setupFilesAfterEnv` semantic difference is surfaced as a verify warning.
-- `[x] Supported` `globalSetup` -> `test.globalSetup`.
+- `[x] Supported` `globalSetup` -> `test.globalSetup`, with CommonJS-extension (`.js`/`.cjs`) detection emitting a verify warning and inline `// VERIFY:` comment about Vitest's ESM default-export requirement.
 - `[x] Supported` `globalTeardown` is preserved as a `// MANUAL:` comment with a manual warning; no invalid `test.globalTeardown` key is emitted.
 - `[x] Supported` `done` callback info warning emitted when `setupFilesAfterEnv` is present (legacy setup pattern).
 
@@ -280,12 +281,30 @@ Legend:
 
 ## Remaining Backlog (Lower Priority)
 
-- `[ ] Unsupported` Plugin output for file stubs in `moduleNameMapper` (e.g. `vite-plugin-svgr`, `assetsPlugin`).
-- `[~] Partial` `testRegex` regex-to-glob conversion (currently falls back to a default Vitest glob with a verify warning).
+- `[~] Partial` `testRegex` regex-to-glob conversion (currently falls back to a default Vitest glob with a verify warning; inline note attached).
 - `[~] Partial` `__mocks__` warning is currently manual-tier; the guide places it at verify-tier.
 - `[~] Partial` Path-aware normalizer for `<rootDir>` substitutions (currently a string replace; does not distinguish globs from file paths from package names).
-- `[~] Partial` Extend `tests/converter.test.ts` with the remaining six PROBLEM GUIDE use cases as standalone fixture-based tests.
+- `[~] Partial` Extend `tests/converter.test.ts` with the remaining six PROBLEM GUIDE use cases as standalone fixture-based tests, plus real-world fixtures (Next.js, Nx, CRA, Remix, T3, Vue + craco, Vite + jest hybrid).
 - `[~] Partial` `watchPathIgnorePatterns` only emits a manual warning pointing to Vite's `server.watch.ignored`.
+
+## CLI surface
+
+- `[x] Supported` `--apply` mode auto-detects jest.config.{ts,mts,cts,js,mjs,cjs,json} or package.json#jest, writes vitest.config.ts, updates package.json devDependencies and scripts.
+- `[x] Supported` `--apply` refuses to run on a dirty git tree (override with `--force`).
+- `[x] Supported` `--apply` refuses to run outside a git repo (override with `--force`).
+- `[x] Supported` `--apply --delete-old` removes the original jest.config file after successful conversion.
+- `[x] Supported` `--apply` refuses to overwrite an existing vitest.config.ts (override with `--force`).
+- `[x] Supported` `--json` emits the conversion (or apply) result as JSON for CI integration.
+- `[x] Supported` `--no-format` disables output pretty-printing (escape hatch).
+- `[x] Supported` `--strict` exits non-zero when any manual-tier warning is emitted.
+- `[x] Supported` GitHub Action (`action.yml` at repo root) wraps the CLI; exposes `output-file`, `warning-count`, `manual-count`, `json` outputs.
+
+## Output formatting
+
+- `[x] Supported` Custom AST-based pretty-printer for multi-line arrays and nested objects (no `prettier` dependency).
+- `[x] Supported` Single-quote normalization for string literals and object keys.
+- `[x] Supported` Inline `// VERIFY:` / `// MANUAL:` comments attached to field-tied warnings (`mockReset`, `setupFiles`, `reporters`, `deps`, `thresholds`, `environmentOptions`, `globalSetup`, `include` from testRegex).
+- `[x] Supported` `format: false` option in the programmatic API and `--no-format` flag in the CLI for raw babel-generator output.
 
 ## Current Classification
 

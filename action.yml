@@ -1,0 +1,104 @@
+name: 'Jest to Vitest config converter'
+description: 'Convert a Jest config to a Vitest config. AST-based, framework-aware, with actionable warnings.'
+author: 'ShiftKit'
+branding:
+  icon: 'shuffle'
+  color: 'green'
+
+inputs:
+  file:
+    description: 'Path to the jest.config.* file. Ignored when apply=true (auto-detected). Defaults to stdin.'
+    required: false
+    default: ''
+  mode:
+    description: "Output mode: 'standalone' (default) or 'merge' (for an existing vite.config.ts)."
+    required: false
+    default: 'standalone'
+  apply:
+    description: 'When "true", write vitest.config.ts to disk and update package.json. When "false" (default), print to stdout.'
+    required: false
+    default: 'false'
+  delete-old:
+    description: 'With apply=true, also delete the original jest.config.* file.'
+    required: false
+    default: 'false'
+  strict:
+    description: 'Fail the action if any manual-tier warnings are emitted.'
+    required: false
+    default: 'false'
+  force:
+    description: 'With apply=true, bypass dirty-tree and not-a-git-repo checks.'
+    required: false
+    default: 'false'
+  working-directory:
+    description: 'Working directory for the run.'
+    required: false
+    default: '.'
+  package-version:
+    description: 'npm dist-tag or version range for @shiftkit/jest-to-vitest (e.g. "latest", "^0.2.0").'
+    required: false
+    default: 'latest'
+
+outputs:
+  output-file:
+    description: 'Absolute path to the written vitest.config.ts (only set when apply=true).'
+    value: ${{ steps.run.outputs.output-file }}
+  warning-count:
+    description: 'Total number of warnings emitted (info + verify + manual).'
+    value: ${{ steps.run.outputs.warning-count }}
+  manual-count:
+    description: 'Number of manual-tier warnings emitted.'
+    value: ${{ steps.run.outputs.manual-count }}
+  json:
+    description: 'Full converter output as a JSON string (the same payload --json prints).'
+    value: ${{ steps.run.outputs.json }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Run @shiftkit/jest-to-vitest
+      id: run
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        INPUT_FILE: ${{ inputs.file }}
+        INPUT_MODE: ${{ inputs.mode }}
+        INPUT_APPLY: ${{ inputs.apply }}
+        INPUT_DELETE_OLD: ${{ inputs.delete-old }}
+        INPUT_STRICT: ${{ inputs.strict }}
+        INPUT_FORCE: ${{ inputs.force }}
+        INPUT_PACKAGE_VERSION: ${{ inputs.package-version }}
+      run: |
+        set -euo pipefail
+        if [ "$INPUT_APPLY" != "true" ] && [ -z "$INPUT_FILE" ]; then
+          echo "Error: neither 'apply' nor 'file' was set. Provide a file path (e.g. file: jest.config.js) or set apply: 'true'." >&2
+          exit 2
+        fi
+        ARGS=( "--json" "--mode" "$INPUT_MODE" )
+        if [ "$INPUT_STRICT" = "true" ]; then ARGS+=( "--strict" ); fi
+        if [ "$INPUT_APPLY" = "true" ]; then
+          ARGS+=( "--apply" )
+          if [ "$INPUT_DELETE_OLD" = "true" ]; then ARGS+=( "--delete-old" ); fi
+          if [ "$INPUT_FORCE" = "true" ]; then ARGS+=( "--force" ); fi
+        elif [ -n "$INPUT_FILE" ]; then
+          ARGS+=( "$INPUT_FILE" )
+        fi
+        OUTPUT=$(npx --yes "@shiftkit/jest-to-vitest@$INPUT_PACKAGE_VERSION" "${ARGS[@]}")
+        echo "$OUTPUT"
+
+        # Persist outputs (JSON is multi-line — use heredoc form).
+        {
+          echo "json<<__J2V_EOF__"
+          echo "$OUTPUT"
+          echo "__J2V_EOF__"
+        } >> "$GITHUB_OUTPUT"
+
+        WARNING_COUNT=$(echo "$OUTPUT" | jq '.warnings | length')
+        MANUAL_COUNT=$(echo "$OUTPUT" | jq '[.warnings[] | select(.type == "manual")] | length')
+        echo "warning-count=$WARNING_COUNT" >> "$GITHUB_OUTPUT"
+        echo "manual-count=$MANUAL_COUNT" >> "$GITHUB_OUTPUT"
+
+        if [ "$INPUT_APPLY" = "true" ]; then
+          OUTPUT_FILE=$(echo "$OUTPUT" | jq -r '.wrote // empty')
+          echo "output-file=$OUTPUT_FILE" >> "$GITHUB_OUTPUT"
+        fi
