@@ -160,4 +160,4 @@ If you have a `jest.config` that converts incorrectly, please [open an issue](ht
 
 ## License
 
-MIT
+Apache-2.0
