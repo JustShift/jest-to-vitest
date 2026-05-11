@@ -161,16 +161,16 @@ describe('convertJestToVitest — output shape correctness', () => {
     const r = convertJestToVitest(
       "module.exports = { collectCoverageFrom: ['src/**/*.ts', '!src/**/*.d.ts'] };"
     );
-    expect(r.output).toContain('include: ["src/**/*.ts"]');
-    expect(r.output).toContain('exclude: ["src/**/*.d.ts"]');
+    expect(r.output).toMatch(/include: \[['"]src\/\*\*\/\*\.ts['"]\]/);
+    expect(r.output).toMatch(/exclude: \[['"]src\/\*\*\/\*\.d\.ts['"]\]/);
   });
 
   it('converts simple Jest ignore path patterns to Vitest globs', () => {
     const r = convertJestToVitest(
       "module.exports = { testPathIgnorePatterns: ['<rootDir>/build/'], coveragePathIgnorePatterns: ['<rootDir>/generated/'] };"
     );
-    expect(r.output).toContain('exclude: ["build/**"]');
-    expect(r.output).toContain('exclude: ["generated/**"]');
+    expect(r.output).toMatch(/exclude: \[['"]build\/\*\*['"]\]/);
+    expect(r.output).toMatch(/exclude: \[['"]generated\/\*\*['"]\]/);
   });
 
   it('keeps regex-like Jest ignore patterns out of Vitest glob config', () => {
@@ -200,7 +200,7 @@ describe('convertJestToVitest — output shape correctness', () => {
     expect(r.output).toContain('thresholds: {');
     expect(r.output).toContain('lines: 80');
     expect(r.output).toContain('branches: 75');
-    expect(r.output).toMatch(/"\.\/src\/critical\.ts":\s*\{\s*lines:\s*95\s*\}/);
+    expect(r.output).toMatch(/['"]\.\/src\/critical\.ts['"]:\s*\{\s*lines:\s*95\s*\}/);
     expect(r.output).not.toMatch(/global:\s*\{/);
   });
 
@@ -238,7 +238,7 @@ describe('convertJestToVitest — output shape correctness', () => {
     const r = convertJestToVitest(
       JSON.stringify({ testEnvironment: 'node', bail: true })
     );
-    expect(r.output).toContain('environment: "node"');
+    expect(r.output).toMatch(/environment: ['"]node['"]/);
     expect(r.output).toContain('bail: 1');
   });
 
@@ -514,5 +514,151 @@ describe('convertJestToVitest — Use Cases from PROBLEM GUIDE', () => {
     }));
     expect(r.output).toMatch(/environment:\s*["']jsdom["']/);
     expect(r.output).toContain('setupFiles');
+  });
+});
+
+describe('convertJestToVitest — globalSetup ESM detection', () => {
+  it('warns when globalSetup points to a .js file', () => {
+    const r = convertJestToVitest("module.exports = { globalSetup: './global-setup.js' };");
+    expect(r.output).toContain("globalSetup: './global-setup.js'");
+    expect(r.output).toContain('// VERIFY:');
+    expect(messages(r.warnings).some((m) => m.includes('CommonJS extension'))).toBe(true);
+  });
+
+  it('warns when globalSetup points to a .cjs file', () => {
+    const r = convertJestToVitest("module.exports = { globalSetup: './setup.cjs' };");
+    expect(messages(r.warnings).some((m) => m.includes('CommonJS extension'))).toBe(true);
+  });
+
+  it('does not warn for .mjs / .ts / .mts globalSetup files', () => {
+    for (const ext of ['mjs', 'ts', 'mts']) {
+      const r = convertJestToVitest(`module.exports = { globalSetup: './setup.${ext}' };`);
+      expect(messages(r.warnings).some((m) => m.includes('CommonJS extension'))).toBe(false);
+    }
+  });
+
+  it('warns when globalSetup is an array containing .js entries', () => {
+    const r = convertJestToVitest("module.exports = { globalSetup: ['./a.ts', './b.js'] };");
+    expect(messages(r.warnings).some((m) => m.includes('./b.js'))).toBe(true);
+  });
+});
+
+describe('convertJestToVitest — vite-plugin-svgr emission', () => {
+  it('emits svgr plugin import and use when an SVG stub is detected', () => {
+    const r = convertJestToVitest(
+      "module.exports = { moduleNameMapper: { '\\\\.(svg)$': '<rootDir>/test/svg-mock.js' } };"
+    );
+    expect(r.output).toContain("import svgr from 'vite-plugin-svgr'");
+    expect(r.output).toContain('plugins: [svgr()]');
+    expect(r.output).toContain('npm install -D vite-plugin-svgr');
+    expect(r.flags.needsSvgr).toBe(true);
+  });
+
+  it('does NOT emit svgr plugin for non-SVG asset stubs', () => {
+    const r = convertJestToVitest(
+      "module.exports = { moduleNameMapper: { '\\\\.(png|jpg)$': '<rootDir>/test/file-mock.js' } };"
+    );
+    expect(r.output).not.toContain('vite-plugin-svgr');
+    expect(r.flags.needsSvgr).toBe(false);
+  });
+
+  it('emits svgr plugin when SVG appears in a multi-asset stub', () => {
+    const r = convertJestToVitest(
+      "module.exports = { moduleNameMapper: { '\\\\.(png|jpg|svg)$': '<rootDir>/test/file-mock.js' } };"
+    );
+    expect(r.output).toContain('plugins: [svgr()]');
+    expect(r.flags.needsSvgr).toBe(true);
+  });
+});
+
+describe('convertJestToVitest — inline warning comments', () => {
+  it('attaches an inline VERIFY note to mockReset when mapped from resetMocks', () => {
+    const r = convertJestToVitest('module.exports = { resetMocks: true };');
+    expect(r.output).toMatch(/mockReset: true,\s*\/\/ VERIFY:/);
+  });
+
+  it('attaches an inline VERIFY note to coverage.thresholds', () => {
+    const r = convertJestToVitest(`module.exports = {
+      coverageThreshold: { global: { lines: 80 } },
+    };`);
+    expect(r.output).toMatch(/thresholds: \{[^}]*\},\s*\/\/ VERIFY: V8 AST remapping/);
+  });
+
+  it('attaches an inline VERIFY note to test.setupFiles when setupFilesAfterEnv is present', () => {
+    const r = convertJestToVitest("module.exports = { setupFilesAfterEnv: ['./setup.ts'] };");
+    expect(r.output).toMatch(/setupFiles: \[[^\]]*\],\s*\/\/ VERIFY: includes setupFilesAfterEnv/);
+  });
+
+  it('attaches an inline VERIFY note to reporters', () => {
+    const r = convertJestToVitest("module.exports = { reporters: ['default'] };");
+    expect(r.output).toMatch(/reporters: \[[^\]]*\],\s*\/\/ VERIFY: Jest and Vitest built-in reporter names differ/);
+  });
+
+  it('attaches an inline VERIFY note to deps when moduleDirectories is mapped', () => {
+    const r = convertJestToVitest("module.exports = { moduleDirectories: ['node_modules', 'src'] };");
+    expect(r.output).toMatch(/deps: \{[^}]*\},\s*\/\/ VERIFY: source aliasing belongs in resolve\.alias/);
+  });
+});
+
+describe('convertJestToVitest — pretty-printer', () => {
+  it('breaks projects across lines when it has nested objects', () => {
+    const r = convertJestToVitest(`module.exports = {
+      projects: [
+        { displayName: 'unit', testMatch: ['<rootDir>/src/**/*.test.ts'] },
+        { displayName: 'integration', testMatch: ['<rootDir>/tests/**/*.spec.ts'] },
+      ],
+    };`);
+    // Two project objects must each be on their own line (no '}, {' on the same line).
+    expect(r.output).not.toMatch(/\}, \{/);
+    expect(r.output).toMatch(/projects: \[\n[\s\S]*displayName: 'unit'[\s\S]*displayName: 'integration'[\s\S]*\n\s*\],/);
+  });
+
+  it('keeps short objects inline', () => {
+    const r = convertJestToVitest("module.exports = { coverageThreshold: { global: { lines: 80 } } };");
+    expect(r.output).toMatch(/thresholds: \{ lines: 80 \}/);
+  });
+
+  it('respects format: false (no pretty-printing)', () => {
+    const r = convertJestToVitest(
+      `module.exports = {
+        projects: [
+          { displayName: 'unit', testMatch: ['<rootDir>/src/**/*.test.ts'] },
+          { displayName: 'integration', testMatch: ['<rootDir>/tests/**/*.spec.ts'] },
+        ],
+      };`,
+      { format: false }
+    );
+    // Without formatting the projects value is the raw babel-generator string with '}, {'.
+    expect(r.output).toMatch(/\}, \{/);
+  });
+
+  it('emits valid JS that re-parses cleanly', async () => {
+    const parser = await import('@babel/parser');
+    const r = convertJestToVitest(`module.exports = {
+      testEnvironment: 'jsdom',
+      moduleNameMapper: { '^@/(.*)$': '<rootDir>/src/$1' },
+      coverageThreshold: { global: { lines: 80, branches: 75 } },
+      projects: [
+        { displayName: 'unit', testMatch: ['<rootDir>/src/**/*.test.ts'] },
+        { displayName: 'integration', testMatch: ['<rootDir>/tests/**/*.spec.ts'] },
+      ],
+    };`);
+    expect(() =>
+      parser.parse(r.output, { sourceType: 'module', plugins: ['typescript'] })
+    ).not.toThrow();
+  });
+});
+
+describe('convertJestToVitest — flags', () => {
+  it('reports needsSvgr when SVG stub is detected', () => {
+    const r = convertJestToVitest(
+      "module.exports = { moduleNameMapper: { '\\\\.(svg)$': '<rootDir>/test/svg-mock.js' } };"
+    );
+    expect(r.flags.needsSvgr).toBe(true);
+  });
+
+  it('reports needsSvgr=false by default', () => {
+    const r = convertJestToVitest("module.exports = { testEnvironment: 'jsdom' };");
+    expect(r.flags.needsSvgr).toBe(false);
   });
 });

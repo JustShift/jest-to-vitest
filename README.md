@@ -25,13 +25,22 @@ This would have blocked every major npm supply-chain attack in 2026 (Axios, Triv
 ## CLI
 
 ```bash
-# from a file
+# Convert and write to stdout (warnings on stderr)
 jest-to-vitest jest.config.js > vitest.config.ts
 
-# from stdin
+# Convert from stdin
 cat jest.config.js | jest-to-vitest > vitest.config.ts
 
-# strict mode: exit non-zero if any field needs manual review
+# Apply directly to the repo: writes vitest.config.ts, updates package.json
+jest-to-vitest --apply
+
+# Apply + delete the original jest.config (requires clean git tree)
+jest-to-vitest --apply --delete-old
+
+# Machine-readable output for CI
+jest-to-vitest --json jest.config.js | jq '.warnings[] | select(.type == "manual")'
+
+# Strict: exit non-zero if any field needs manual review
 jest-to-vitest --strict jest.config.js
 ```
 
@@ -40,21 +49,54 @@ Options:
 | Flag | Description |
 |---|---|
 | `-m, --mode <mode>` | `standalone` (default) or `merge` (for an existing `vite.config.ts`) |
+| `--apply` | Auto-detect `jest.config.*` (or `package.json#jest`) and write `vitest.config.ts` to disk, update `package.json` (deps + scripts). Refuses to run on a dirty git tree (override with `--force`). |
+| `--delete-old` | With `--apply`, also remove the original `jest.config.*` file |
+| `--force` | With `--apply`, bypass dirty-tree and not-a-git-repo checks |
+| `--json` | Emit `{ output, warnings, flags }` (or the `--apply` payload) as JSON to stdout |
+| `--no-format` | Disable output pretty-printing |
 | `-s, --strict` | Exit non-zero if any `manual` warnings are emitted |
 | `-q, --quiet` | Suppress warnings on stderr |
 | `-h, --help` | Show usage |
+
+`--apply` writes `vitest.config.ts`, removes `jest`/`@types/jest`/`ts-jest`/`babel-jest`/`@swc/jest` from `devDependencies`, adds `vitest` and any required peers (`@vitest/coverage-v8`, `jsdom`, `happy-dom`, `vite-tsconfig-paths`, `vite-plugin-svgr`) at sensible major ranges, and rewrites `jest` invocations in `scripts`. Run `npm install` afterwards.
 
 ## Programmatic
 
 ```ts
 import { convertJestToVitest } from '@shiftkit/jest-to-vitest';
 
-const { output, warnings, flags } = convertJestToVitest(source, { mode: 'standalone' });
+const { output, warnings, flags } = convertJestToVitest(source, {
+  mode: 'standalone', // or 'merge'
+  format: true,        // pretty-print output (default true)
+});
 
 console.log(output);          // the generated vitest.config.ts
 console.log(warnings);        // [{ type: 'manual' | 'verify' | 'info', message: string }, ...]
 console.log(flags.needsJsdom); // detection signals for the calling tool
+console.log(flags.needsSvgr);  // (etc.)
 ```
+
+## GitHub Action
+
+```yaml
+# .github/workflows/migrate.yml
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - uses: JustShift/jest-to-vitest@v1
+        with:
+          apply: 'true'
+          delete-old: 'true'
+          strict: 'true'
+      - run: npm install
+      - run: npm test
+```
+
+The action inputs mirror the CLI flags (`file`, `mode`, `apply`, `delete-old`, `strict`, `force`, `working-directory`, `package-version`). Outputs: `output-file`, `warning-count`, `manual-count`, `json` (full JSON payload).
 
 ## What's supported
 
