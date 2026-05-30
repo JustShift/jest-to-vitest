@@ -1039,7 +1039,7 @@ export function convertJestToVitest(
   // Build server.deps.inline if we have any.
   let serverBlock = '';
   if (serverDepsInline.length > 0) {
-    serverBlock = `server: { deps: { inline: [${serverDepsInline.map((p) => JSON.stringify(p)).join(', ')}] } }`;
+    serverBlock = `server: { deps: { inline: [${serverDepsInline.map((p) => `'${p}'`).join(', ')}] } }`;
     test.raw.push(`${serverBlock},`);
   }
 
@@ -1182,11 +1182,17 @@ export function convertJestToVitest(
       }
 
       // Image / static asset stubs.
-      const assetMatch = ASSET_EXTS.some((ext) => aliasKey.includes(`\\.(${ext})`) || aliasKey.includes(`|${ext}`)) ||
-        /\\\.\((?:gif|png|jpg|jpeg|svg|webp|avif|ico)\b/.test(aliasKey);
+      const assetMatch = ASSET_EXTS.some((ext) =>
+        aliasKey.includes(`\\.(${ext})`) || aliasKey.includes(`|${ext}`) || aliasKey.includes(`\\.${ext}`)
+      ) || /\\\.\((?:gif|png|jpg|jpeg|svg|webp|avif|ico)\b/.test(aliasKey);
       if (assetMatch) {
-        const isSvgStub = /svg/i.test(aliasKey);
-        if (isSvgStub) {
+        // Only suggest vite-plugin-svgr when the mapper *target* is an SVG-to-React-component
+        // transformer — never from the key alone. A generic stub (fileMock.js,
+        // identity-obj-proxy, a plain string path) must not pull in svgr or rewrite import
+        // semantics to `?react`, even when the key also matches `.svg`.
+        const keyMentionsSvg = /svg/i.test(aliasKey);
+        const targetIsSvgrTransformer = /@svgr\b|\bsvgr\b|svg-?transformer/i.test(aliasVal);
+        if (keyMentionsSvg && targetIsSvgrTransformer) {
           needsSvgr = true;
           if (!rootImports.some((line) => line.includes(`from 'vite-plugin-svgr'`))) {
             rootImports.push(`import svgr from 'vite-plugin-svgr';`);
@@ -1195,19 +1201,20 @@ export function convertJestToVitest(
             rootPlugins.push('svgr()');
           }
           warnInfo(
-            `SVG stub for ${aliasKey} replaced with vite-plugin-svgr plugin. Import SVGs as React components via './foo.svg?react'. The install step is added to the next-steps block.`
+            `SVG-to-component transformer (${aliasVal}) detected for ${aliasKey}. Replaced with the vite-plugin-svgr plugin; import SVGs as React components via './foo.svg?react'. The install step is added to the next-steps block.`
           );
         } else {
           warnVerify(
-            `Image/asset stub for ${aliasKey} detected. Vite serves these as URLs by default; remove the stub or replace with a custom plugin if needed.`
+            `Asset stub for ${aliasKey} -> ${aliasVal} detected. Vite serves assets as URLs by default; remove the stub, or add a Vite plugin (e.g. vite-plugin-svgr for SVG-as-component) if you relied on a transformer.`
           );
         }
         return;
       }
 
       // Font stubs.
-      const fontMatch = FONT_EXTS.some((ext) => aliasKey.includes(`\\.(${ext})`) || aliasKey.includes(`|${ext}`)) ||
-        /\\\.\((?:woff2?|eot|ttf|otf)\b/.test(aliasKey);
+      const fontMatch = FONT_EXTS.some((ext) =>
+        aliasKey.includes(`\\.(${ext})`) || aliasKey.includes(`|${ext}`) || aliasKey.includes(`\\.${ext}`)
+      ) || /\\\.\((?:woff2?|eot|ttf|otf)\b/.test(aliasKey);
       if (fontMatch) {
         warnInfo(
           `Font stub for ${aliasKey} detected. Vite handles font URLs natively. Drop the stub.`

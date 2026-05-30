@@ -83,8 +83,8 @@ Legend:
 - `[x] Supported` `moduleNameMapper: pathsToModuleNameMapper(...)` triggers `vite-tsconfig-paths` plugin output and tailored install step.
 - `[x] Supported` Relative aliases are rewritten with `path.resolve(__dirname, ...)` and `import path from 'node:path'` is auto-added.
 - `[x] Supported` CSS file stubs are detected and emit `test.css: false` with a verify warning.
-- `[x] Supported` Image/asset stubs detected across `gif|png|jpg|jpeg|svg|webp|avif|ico` with verify warning.
-- `[x] Supported` SVG-specific stubs emit `import svgr from 'vite-plugin-svgr'` + `plugins: [svgr()]` + tailored install step (instead of just a warning). Flag `needsSvgr` set.
+- `[x] Supported` Image/asset stubs detected across `gif|png|jpg|jpeg|svg|webp|avif|ico` (including single-extension keys like `\.svg$`) with verify warning.
+- `[x] Supported` SVG stubs whose **target** is an SVG-to-component transformer (`@svgr/*`, `jest-svg-transformer`) emit `import svgr from 'vite-plugin-svgr'` + `plugins: [svgr()]` + tailored install step, and set the `needsSvgr` flag. SVG keys mapped to generic stubs (`fileMock.js`, `identity-obj-proxy`, a plain string) get a verify warning only — no svgr, no `?react` rewrite.
 - `[x] Supported` Font stubs detected across `woff|woff2|eot|ttf|otf` with info warning.
 - `[x] Supported` Alias cleanup handles `^@/(.*)$` and `<rootDir>/src/$1` patterns.
 - `[x] Supported` `moduleDirectories` -> `test.deps.moduleDirectories` with verify warning explaining source-vs-mock distinction.
@@ -92,7 +92,7 @@ Legend:
 - `[x] Supported` `moduleFileExtensions` -> `resolve.extensions` (separate from `resolve.alias`).
 - `[x] Supported` `resolver` emits manual warning.
 - `[x] Supported` `unmockedModulePathPatterns` emits manual warning.
-- `[x] Supported` Plugin output for SVG stubs (`vite-plugin-svgr` import + plugin + install step).
+- `[x] Supported` Plugin output (`vite-plugin-svgr` import + plugin + install step) for SVG keys whose target is an SVG-to-component transformer.
 
 ## Setup And Teardown Fields
 

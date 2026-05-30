@@ -254,7 +254,7 @@ describe('convertJestToVitest — output shape correctness', () => {
     const r = convertJestToVitest(
       "module.exports = { transformIgnorePatterns: ['node_modules/(?!(swiper|nanoid)/)'] };"
     );
-    expect(r.output).toContain("inline: [\"swiper\", \"nanoid\"]");
+    expect(r.output).toContain("inline: ['swiper', 'nanoid']");
   });
 
   it('moves object globals to root-level define and strips ts-jest', () => {
@@ -544,13 +544,21 @@ describe('convertJestToVitest — globalSetup ESM detection', () => {
 });
 
 describe('convertJestToVitest — vite-plugin-svgr emission', () => {
-  it('emits svgr plugin import and use when an SVG stub is detected', () => {
+  it('emits svgr plugin only when the target is an SVG-to-component transformer', () => {
     const r = convertJestToVitest(
-      "module.exports = { moduleNameMapper: { '\\\\.(svg)$': '<rootDir>/test/svg-mock.js' } };"
+      "module.exports = { moduleNameMapper: { '\\\\.svg$': 'jest-svg-transformer' } };"
     );
     expect(r.output).toContain("import svgr from 'vite-plugin-svgr'");
     expect(r.output).toContain('plugins: [svgr()]');
     expect(r.output).toContain('npm install -D vite-plugin-svgr');
+    expect(r.flags.needsSvgr).toBe(true);
+  });
+
+  it('recognizes @svgr/* transformers as svgr targets', () => {
+    const r = convertJestToVitest(
+      "module.exports = { moduleNameMapper: { '\\\\.(svg)$': '@svgr/webpack' } };"
+    );
+    expect(r.output).toContain('plugins: [svgr()]');
     expect(r.flags.needsSvgr).toBe(true);
   });
 
@@ -562,12 +570,22 @@ describe('convertJestToVitest — vite-plugin-svgr emission', () => {
     expect(r.flags.needsSvgr).toBe(false);
   });
 
-  it('emits svgr plugin when SVG appears in a multi-asset stub', () => {
+  it('does NOT emit svgr when an SVG key maps to a generic file mock', () => {
     const r = convertJestToVitest(
       "module.exports = { moduleNameMapper: { '\\\\.(png|jpg|svg)$': '<rootDir>/test/file-mock.js' } };"
     );
-    expect(r.output).toContain('plugins: [svgr()]');
-    expect(r.flags.needsSvgr).toBe(true);
+    expect(r.output).not.toContain('vite-plugin-svgr');
+    expect(r.flags.needsSvgr).toBe(false);
+    // The SVG/asset key is reported for review rather than silently transformed.
+    expect(messages(r.warnings).some((m) => m.includes('Asset stub'))).toBe(true);
+  });
+
+  it('does NOT emit svgr when an SVG key maps to identity-obj-proxy', () => {
+    const r = convertJestToVitest(
+      "module.exports = { moduleNameMapper: { '\\\\.svg$': 'identity-obj-proxy' } };"
+    );
+    expect(r.output).not.toContain('vite-plugin-svgr');
+    expect(r.flags.needsSvgr).toBe(false);
   });
 });
 
@@ -650,9 +668,9 @@ describe('convertJestToVitest — pretty-printer', () => {
 });
 
 describe('convertJestToVitest — flags', () => {
-  it('reports needsSvgr when SVG stub is detected', () => {
+  it('reports needsSvgr when an SVG-to-component transformer is detected', () => {
     const r = convertJestToVitest(
-      "module.exports = { moduleNameMapper: { '\\\\.(svg)$': '<rootDir>/test/svg-mock.js' } };"
+      "module.exports = { moduleNameMapper: { '\\\\.(svg)$': 'jest-svg-transformer' } };"
     );
     expect(r.flags.needsSvgr).toBe(true);
   });

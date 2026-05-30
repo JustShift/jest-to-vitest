@@ -1,5 +1,21 @@
 # Changelog
 
+<!--
+  Keep an "## Unreleased" section at the top while work accumulates.
+  At release time, rename it to "## <version> — <YYYY-MM-DD>" BEFORE tagging —
+  the release workflow extracts that exact section for the GitHub Release notes.
+-->
+
+## Unreleased
+
+- fix(converter): `vite-plugin-svgr` is now emitted **only** when a `moduleNameMapper` entry's _target_ is an SVG-to-component transformer (e.g. `@svgr/*`, `jest-svg-transformer`). Previously any key mentioning `.svg` — including generic stubs mapped to `fileMock.js` or `identity-obj-proxy` — silently pulled in `vite-plugin-svgr` and rewrote SVG imports to `?react`. Such stubs now emit a verify warning instead, with no unexpected dependency or import-semantics change.
+- fix(converter): single-extension asset/font keys (e.g. `\.svg$`, `\.png$`, `\.woff2$`) are now recognized as asset/font stubs instead of becoming invalid regex-keyed `resolve.alias` entries.
+- chore(cli): bump default `--apply` devDependency ranges to current majors — `jsdom@^29`, `happy-dom@^20`, `vite-tsconfig-paths@^6`, `vite-plugin-svgr@^5` (`vitest@^4` unchanged).
+- style(converter): `server.deps.inline` package names now use single quotes, matching the rest of the generated config.
+- ci: tests are now type-checked in CI via `tsconfig.test.json` (`npm run lint` covers `tests/` too).
+- ci: the release workflow now creates a **GitHub Release** (notes sourced from this changelog) after publishing to npm.
+- docs: `RELEASING.md` rewritten as a single, consistent, step-by-step trunk-based guide.
+
 ## 0.2.0 — 2026-05-11
 
 - feat(cli): `--apply` mode auto-detects `jest.config.{ts,mts,cts,js,mjs,cjs,json}` (or `package.json#jest`), writes `vitest.config.ts`, updates `package.json` deps and scripts. Refuses to run on a dirty git tree (`--force` to override). Optional `--delete-old` removes the original Jest config.
