@@ -8,6 +8,8 @@
 
 ## Unreleased
 
+## 0.2.1 — 2026-05-30
+
 - fix(converter): `vite-plugin-svgr` is now emitted **only** when a `moduleNameMapper` entry's _target_ is an SVG-to-component transformer (e.g. `@svgr/*`, `jest-svg-transformer`). Previously any key mentioning `.svg` — including generic stubs mapped to `fileMock.js` or `identity-obj-proxy` — silently pulled in `vite-plugin-svgr` and rewrote SVG imports to `?react`. Such stubs now emit a verify warning instead, with no unexpected dependency or import-semantics change.
 - fix(converter): single-extension asset/font keys (e.g. `\.svg$`, `\.png$`, `\.woff2$`) are now recognized as asset/font stubs instead of becoming invalid regex-keyed `resolve.alias` entries.
 - chore(cli): bump default `--apply` devDependency ranges to current majors — `jsdom@^29`, `happy-dom@^20`, `vite-tsconfig-paths@^6`, `vite-plugin-svgr@^5` (`vitest@^4` unchanged).
