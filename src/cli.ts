@@ -193,12 +193,14 @@ const updatePackageJson = (pkgPath: string, flags: ConversionFlags): { removed: 
       added.push(name);
     }
   };
+  // Default version ranges for newly-added devDependencies. Reviewed 2026-05;
+  // bump these when the Vitest ecosystem ships new majors (see RELEASING.md).
   addDep('vitest', '^4.0.0');
   if (flags.needsCoverage) addDep('@vitest/coverage-v8', '^4.0.0');
-  if (flags.needsJsdom) addDep('jsdom', '^25.0.0');
-  if (flags.needsHappyDom) addDep('happy-dom', '^15.0.0');
-  if (flags.needsTsconfigPaths) addDep('vite-tsconfig-paths', '^5.0.0');
-  if (flags.needsSvgr) addDep('vite-plugin-svgr', '^4.0.0');
+  if (flags.needsJsdom) addDep('jsdom', '^29.0.0');
+  if (flags.needsHappyDom) addDep('happy-dom', '^20.0.0');
+  if (flags.needsTsconfigPaths) addDep('vite-tsconfig-paths', '^6.0.0');
+  if (flags.needsSvgr) addDep('vite-plugin-svgr', '^5.0.0');
 
   if (pkg.scripts) {
     for (const [k, v] of Object.entries(pkg.scripts)) {
