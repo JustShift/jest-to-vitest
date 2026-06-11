@@ -8,6 +8,28 @@
 
 ## Unreleased
 
+## 0.3.0 — 2026-06-11
+
+- feat(converter): detect `next/jest` wrapper configs (`createJestConfig(...)`
+  produced by the `next/jest` factory). The inner Jest config is converted, and
+  `@vitejs/plugin-react` + `vite-tsconfig-paths` are added to cover the SWC
+  preset's implicit TS/JSX and path-alias handling, with a warning that CSS and
+  `next/image`-style imports may still need setup-file mocks.
+- feat(converter): resolve identifier arguments passed to unknown wrapper calls,
+  so `wrap(customConfig)` is analyzed instead of dropped.
+- feat(converter): remap `projects` entries to the Vitest `{ test: { ... } }`
+  shape; glob-string entries pass through with `<rootDir>` normalized;
+  unmappable project fields are preserved as MANUAL comments with a warning;
+  a non-static `projects` value falls back to MANUAL.
+- fix(converter): nest `testEnvironmentOptions` under the resolved environment
+  (jsdom / happy-dom) regardless of key order; keep it MANUAL when the
+  environment takes no options.
+- fix(converter): drop `customExportConditions` with a manual warning.
+- fix(converter): strip non-capturing-group syntax from
+  `transformIgnorePatterns` packages, handle pnpm-style chained lookaheads
+  (excluding `.pnpm`), and warn instead of emitting garbage for unparseable
+  lookahead items.
+
 ## 0.2.1 — 2026-05-30
 
 - fix(converter): `vite-plugin-svgr` is now emitted **only** when a `moduleNameMapper` entry's _target_ is an SVG-to-component transformer (e.g. `@svgr/*`, `jest-svg-transformer`). Previously any key mentioning `.svg` — including generic stubs mapped to `fileMock.js` or `identity-obj-proxy` — silently pulled in `vite-plugin-svgr` and rewrote SVG imports to `?react`. Such stubs now emit a verify warning instead, with no unexpected dependency or import-semantics change.
