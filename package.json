@@ -1,6 +1,6 @@
 {
   "name": "@shiftkit/jest-to-vitest",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Convert a Jest config to a Vitest config. AST-based, framework-aware, with actionable warnings.",
   "keywords": [
     "jest",
