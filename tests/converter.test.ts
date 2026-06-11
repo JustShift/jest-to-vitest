@@ -79,6 +79,50 @@ describe('convertJestToVitest — input shape coverage', () => {
     );
     expect(r.output).toMatch(/environment:\s*["']jsdom["']/);
   });
+
+  it('handles the CJS next/jest shape from the Next.js docs', () => {
+    const r = convertJestToVitest(`
+      const nextJest = require('next/jest');
+      const createJestConfig = nextJest({ dir: './' });
+      const customJestConfig = {
+        setupFilesAfterEach: [],
+        setupFilesAfterEnv: ['<rootDir>/jest.setup.js'],
+        testEnvironment: 'jest-environment-jsdom',
+      };
+      module.exports = createJestConfig(customJestConfig);
+    `);
+    expect(r.output).toContain("environment: 'jsdom'");
+    expect(r.output).toContain('./jest.setup.js');
+    expect(r.output).toContain(`import react from '@vitejs/plugin-react';`);
+    expect(r.output).toContain('react()');
+    expect(r.output).toContain('tsconfigPaths()');
+    expect(messages(r.warnings).some((m) => m.includes('next/jest wrapper'))).toBe(true);
+  });
+
+  it('handles the ESM next/jest shape with export default', () => {
+    const r = convertJestToVitest(`
+      import nextJest from 'next/jest.js';
+      const createJestConfig = nextJest({ dir: './' });
+      const config = {
+        coverageProvider: 'v8',
+        testEnvironment: 'jsdom',
+      };
+      export default createJestConfig(config);
+    `);
+    expect(r.output).toContain("environment: 'jsdom'");
+    expect(r.output).toContain('react()');
+    expect(messages(r.warnings).some((m) => m.includes('next/jest wrapper'))).toBe(true);
+  });
+
+  it('resolves identifier arguments of unknown wrapper calls without next/jest extras', () => {
+    const r = convertJestToVitest(`
+      const base = { testTimeout: 5000 };
+      module.exports = withSomething(base);
+    `);
+    expect(r.output).toContain('testTimeout: 5000');
+    expect(r.output).not.toContain('@vitejs/plugin-react');
+    expect(messages(r.warnings).some((m) => m.includes('next/jest wrapper'))).toBe(false);
+  });
 });
 
 describe('convertJestToVitest — output shape correctness', () => {
@@ -221,6 +265,52 @@ describe('convertJestToVitest — output shape correctness', () => {
     expect(r.output).toContain("jsdom: { url: 'http://localhost' }");
   });
 
+  it('nests testEnvironmentOptions under the resolved environment', () => {
+    const r = convertJestToVitest(
+      "module.exports = { testEnvironment: 'jsdom', testEnvironmentOptions: { url: 'https://example.com', pretendToBeVisual: true } };"
+    );
+    expect(r.output).toMatch(/environmentOptions: \{\s*jsdom: \{[^}]*url: 'https:\/\/example\.com'/);
+    expect(r.output).toMatch(/pretendToBeVisual: true/);
+    // The flat shape must not survive at the top of environmentOptions.
+    expect(r.output).not.toMatch(/environmentOptions: \{\s*url:/);
+  });
+
+  it('nests testEnvironmentOptions under happyDOM regardless of key order', () => {
+    const r = convertJestToVitest(
+      "module.exports = { testEnvironmentOptions: { width: 1920 }, testEnvironment: 'happy-dom' };"
+    );
+    expect(r.output).toMatch(/environmentOptions: \{\s*happyDOM: \{\s*width: 1920/);
+  });
+
+  it('drops customExportConditions with a manual warning', () => {
+    const r = convertJestToVitest(
+      "module.exports = { testEnvironment: 'jsdom', testEnvironmentOptions: { customExportConditions: [''], url: 'http://localhost' } };"
+    );
+    expect(r.output).not.toContain('customExportConditions');
+    expect(r.output).toContain("jsdom: { url: 'http://localhost' }");
+    expect(
+      r.warnings.some((w) => w.type === 'manual' && w.message.includes('customExportConditions'))
+    ).toBe(true);
+  });
+
+  it('keeps testEnvironmentOptions as MANUAL when the environment takes no options', () => {
+    const r = convertJestToVitest(
+      "module.exports = { testEnvironment: 'node', testEnvironmentOptions: { customExportConditions: ['node'], foo: 1 } };"
+    );
+    expect(r.output).toContain('// MANUAL: testEnvironmentOptions');
+    expect(r.output).not.toMatch(/environmentOptions: \{\s*foo/);
+  });
+
+  it('nests testEnvironmentOptions inside project objects', () => {
+    const r = convertJestToVitest(`module.exports = {
+      projects: [
+        { displayName: 'dom', testEnvironment: 'jsdom', testEnvironmentOptions: { url: 'http://localhost' } },
+      ],
+    };`);
+    expect(r.output).toMatch(/environmentOptions: \{\s*jsdom: \{\s*url: 'http:\/\/localhost'/);
+    expect(r.output).not.toContain('testEnvironmentOptions');
+  });
+
   it('normalizes Jest environment package names', () => {
     const jsdom = convertJestToVitest(
       "module.exports = { testEnvironment: 'jest-environment-jsdom' };"
@@ -255,6 +345,33 @@ describe('convertJestToVitest — output shape correctness', () => {
       "module.exports = { transformIgnorePatterns: ['node_modules/(?!(swiper|nanoid)/)'] };"
     );
     expect(r.output).toContain("inline: ['swiper', 'nanoid']");
+  });
+
+  it('strips non-capturing group syntax from transformIgnorePatterns packages', () => {
+    const r = convertJestToVitest(
+      "module.exports = { transformIgnorePatterns: ['node_modules/(?!(?:swiper|nanoid)/)'] };"
+    );
+    expect(r.output).toContain("inline: ['swiper', 'nanoid']");
+    expect(r.output).not.toContain('?:');
+  });
+
+  it('handles pnpm-style chained lookaheads and excludes .pnpm', () => {
+    const r = convertJestToVitest(
+      "module.exports = { transformIgnorePatterns: ['node_modules/(?!.pnpm)(?!(swiper|@scope/pkg))'] };"
+    );
+    expect(r.output).toContain("inline: ['swiper', '@scope/pkg']");
+    expect(r.output).not.toContain('.pnpm');
+  });
+
+  it('warns instead of emitting garbage for unparseable lookahead items', () => {
+    const r = convertJestToVitest(
+      "module.exports = { transformIgnorePatterns: ['node_modules/(?!(jest-)?react-native/)'] };"
+    );
+    expect(r.output).not.toContain('inline:');
+    expect(r.output).not.toContain("'jest-'");
+    expect(
+      r.warnings.some((w) => w.type === 'verify' && w.message.includes('could not be parsed into package names'))
+    ).toBe(true);
   });
 
   it('moves object globals to root-level define and strips ts-jest', () => {
@@ -618,6 +735,62 @@ describe('convertJestToVitest — inline warning comments', () => {
   });
 });
 
+describe('convertJestToVitest — projects remapping', () => {
+  it('remaps project objects to the Vitest { test: { ... } } shape', () => {
+    const r = convertJestToVitest(`module.exports = {
+      projects: [
+        {
+          displayName: 'unit',
+          testMatch: ['<rootDir>/src/**/*.test.ts'],
+          testEnvironment: 'jest-environment-jsdom',
+          setupFilesAfterEnv: ['<rootDir>/jest.setup.ts'],
+        },
+        {
+          displayName: 'integration',
+          testEnvironment: 'node',
+          testPathIgnorePatterns: ['/node_modules/', '/dist/'],
+        },
+      ],
+    };`);
+    expect(r.output).toMatch(/projects: \[[\s\S]*\{\n\s*test: \{[\s\S]*name: 'unit'/);
+    expect(r.output).toContain("environment: 'jsdom'");
+    expect(r.output).toContain("environment: 'node'");
+    expect(r.output).toContain('./src/**/*.test.ts');
+    expect(r.output).toContain('./jest.setup.ts');
+    // No Jest field names may survive inside projects.
+    expect(r.output).not.toContain('displayName');
+    expect(r.output).not.toContain('testMatch');
+    expect(r.output).not.toContain('testEnvironment');
+    expect(r.output).not.toContain('setupFilesAfterEnv:');
+    expect(messages(r.warnings).some((m) => m.includes('extends: true'))).toBe(true);
+  });
+
+  it('passes glob string project entries through with <rootDir> normalized', () => {
+    const r = convertJestToVitest(
+      "module.exports = { projects: ['<rootDir>/packages/*'] };"
+    );
+    expect(r.output).toContain("'./packages/*',");
+  });
+
+  it('preserves unmappable project fields as MANUAL comments with a warning', () => {
+    const r = convertJestToVitest(`module.exports = {
+      projects: [
+        { displayName: 'web', moduleNameMapper: { '^@/(.*)$': '<rootDir>/src/$1' } },
+      ],
+    };`);
+    expect(r.output).toMatch(/\/\/ MANUAL: moduleNameMapper/);
+    expect(
+      messages(r.warnings).some((m) => m.includes("projects 'web'") && m.includes('moduleNameMapper'))
+    ).toBe(true);
+  });
+
+  it('falls back to MANUAL for a non-static projects value', () => {
+    const r = convertJestToVitest("module.exports = { projects: getProjects() };");
+    expect(r.output).toContain('// MANUAL: projects:');
+    expect(messages(r.warnings).some((m) => m.includes('projects is not a static array'))).toBe(true);
+  });
+});
+
 describe('convertJestToVitest — pretty-printer', () => {
   it('breaks projects across lines when it has nested objects', () => {
     const r = convertJestToVitest(`module.exports = {
@@ -628,7 +801,7 @@ describe('convertJestToVitest — pretty-printer', () => {
     };`);
     // Two project objects must each be on their own line (no '}, {' on the same line).
     expect(r.output).not.toMatch(/\}, \{/);
-    expect(r.output).toMatch(/projects: \[\n[\s\S]*displayName: 'unit'[\s\S]*displayName: 'integration'[\s\S]*\n\s*\],/);
+    expect(r.output).toMatch(/projects: \[\n[\s\S]*name: 'unit'[\s\S]*name: 'integration'[\s\S]*\n\s*\],/);
   });
 
   it('keeps short objects inline', () => {
@@ -638,16 +811,12 @@ describe('convertJestToVitest — pretty-printer', () => {
 
   it('respects format: false (no pretty-printing)', () => {
     const r = convertJestToVitest(
-      `module.exports = {
-        projects: [
-          { displayName: 'unit', testMatch: ['<rootDir>/src/**/*.test.ts'] },
-          { displayName: 'integration', testMatch: ['<rootDir>/tests/**/*.spec.ts'] },
-        ],
-      };`,
+      "module.exports = { snapshotFormat: { printBasicPrototype: false } };",
       { format: false }
     );
-    // Without formatting the projects value is the raw babel-generator string with '}, {'.
-    expect(r.output).toMatch(/\}, \{/);
+    // Without formatting the value is the raw babel-generator string (multi-line object),
+    // where format: true would inline an object this short.
+    expect(r.output).toMatch(/snapshotFormat: \{\n/);
   });
 
   it('emits valid JS that re-parses cleanly', async () => {

@@ -1,5 +1,5 @@
 import * as parser from '@babel/parser';
-import _traverse, { type NodePath } from '@babel/traverse';
+import _traverse, { type NodePath, type Scope } from '@babel/traverse';
 import _generator from '@babel/generator';
 import * as t from '@babel/types';
 
@@ -126,6 +126,7 @@ export function convertJestToVitest(
   let configObject: t.ObjectExpression | null = null;
   let embeddedParent: 'vue.config' | 'craco.config' | null = null;
   let usedFunctionForm = false;
+  let usedNextJest = false;
 
   // Heuristic: if a top-level config object has a `jest:` key plus parent-config indicators,
   // it's an embedded config. Extract the jest sub-object and remember which parent it came from.
@@ -154,7 +155,7 @@ export function convertJestToVitest(
   };
 
   // Unwrap function-form configs: () => ({...}), async () => ({...}), function() { return {...} }.
-  const extractFromFunctionBody = (node: t.Node): t.ObjectExpression | null => {
+  const extractFromFunctionBody = (node: t.Node, scope?: Scope): t.ObjectExpression | null => {
     if (!t.isArrowFunctionExpression(node) && !t.isFunctionExpression(node)) return null;
     usedFunctionForm = true;
     const body = node.body;
@@ -163,31 +164,89 @@ export function convertJestToVitest(
       // Find a single ReturnStatement.
       const returns = body.body.filter((s) => t.isReturnStatement(s)) as t.ReturnStatement[];
       if (returns.length === 1 && returns[0].argument) {
-        const direct = extractObjectArg(returns[0].argument);
+        const direct = extractObjectArg(returns[0].argument, scope);
         if (direct) return direct;
       }
     }
     return null;
   };
 
-  const extractObjectArg = (node: t.Node | null | undefined): t.ObjectExpression | null => {
+  // Resolve the module source a local name was bound from (import or require).
+  const moduleSourceOf = (name: string, scope: Scope): string | null => {
+    const binding = scope.getBinding(name);
+    if (!binding) return null;
+    const bindingNode = binding.path.node;
+    if (
+      (t.isImportDefaultSpecifier(bindingNode) ||
+        t.isImportSpecifier(bindingNode) ||
+        t.isImportNamespaceSpecifier(bindingNode)) &&
+      t.isImportDeclaration(binding.path.parent)
+    ) {
+      return binding.path.parent.source.value;
+    }
+    if (t.isVariableDeclarator(bindingNode) && bindingNode.init) {
+      // const x = require('m') or require('m').default
+      let init: t.Node = bindingNode.init;
+      if (t.isMemberExpression(init)) init = init.object;
+      if (
+        t.isCallExpression(init) &&
+        t.isIdentifier(init.callee, { name: 'require' }) &&
+        init.arguments.length > 0 &&
+        t.isStringLiteral(init.arguments[0])
+      ) {
+        return init.arguments[0].value;
+      }
+    }
+    return null;
+  };
+
+  // True for `createJestConfig(...)` where createJestConfig was produced by a
+  // factory imported from 'next/jest' (the shape the Next.js docs ship).
+  const isNextJestWrapperCall = (call: t.CallExpression, scope: Scope): boolean => {
+    if (!t.isIdentifier(call.callee)) return false;
+    const binding = scope.getBinding(call.callee.name);
+    if (!binding || !t.isVariableDeclarator(binding.path.node)) return false;
+    const init = binding.path.node.init;
+    if (!init || !t.isCallExpression(init) || !t.isIdentifier(init.callee)) return false;
+    const source = moduleSourceOf(init.callee.name, scope);
+    return source !== null && /^next\/jest(\.js)?$/.test(source);
+  };
+
+  // Guard against self-referential bindings (const a = a) during resolution.
+  const resolvedIdentifiers = new Set<string>();
+
+  const extractObjectArg = (node: t.Node | null | undefined, scope?: Scope): t.ObjectExpression | null => {
     if (!node) return null;
     if (t.isObjectExpression(node)) {
       const embedded = tryExtractEmbeddedJest(node);
       return embedded ?? node;
     }
     if (t.isCallExpression(node)) {
+      if (scope && isNextJestWrapperCall(node, scope)) usedNextJest = true;
       const arg = node.arguments[0];
       if (arg && t.isObjectExpression(arg)) {
         const embedded = tryExtractEmbeddedJest(arg);
         return embedded ?? arg;
       }
+      // createJestConfig(customJestConfig): resolve the identifier argument.
+      if (arg && t.isIdentifier(arg)) {
+        return extractObjectArg(arg, scope);
+      }
+    }
+    if (t.isIdentifier(node) && scope) {
+      if (resolvedIdentifiers.has(node.name)) return null;
+      resolvedIdentifiers.add(node.name);
+      const binding = scope.getBinding(node.name);
+      if (binding && t.isVariableDeclarator(binding.path.node)) {
+        return extractObjectArg(binding.path.node.init, scope);
+      }
+      return null;
     }
     if (t.isTSAsExpression(node) || t.isTSSatisfiesExpression(node)) {
-      return extractObjectArg(node.expression);
+      return extractObjectArg(node.expression, scope);
     }
     if (t.isArrowFunctionExpression(node) || t.isFunctionExpression(node)) {
-      return extractFromFunctionBody(node);
+      return extractFromFunctionBody(node, scope);
     }
     return null;
   };
@@ -201,31 +260,14 @@ export function convertJestToVitest(
         t.isIdentifier(node.left.object, { name: 'module' }) &&
         t.isIdentifier(node.left.property, { name: 'exports' })
       ) {
-        const direct = extractObjectArg(node.right);
+        const direct = extractObjectArg(node.right, path.scope);
         if (direct) configObject = direct;
-        else if (t.isIdentifier(node.right)) {
-          // module.exports = configIdentifier — try to resolve to a const declaration.
-          const binding = path.scope.getBinding(node.right.name);
-          if (binding && t.isVariableDeclarator(binding.path.node)) {
-            const init = binding.path.node.init;
-            const fromInit = extractObjectArg(init);
-            if (fromInit) configObject = fromInit;
-          }
-        }
       }
     },
     ExportDefaultDeclaration(path: NodePath<t.ExportDefaultDeclaration>) {
       if (configObject) return;
-      const decl = path.node.declaration;
-      const direct = extractObjectArg(decl);
+      const direct = extractObjectArg(path.node.declaration, path.scope);
       if (direct) configObject = direct;
-      else if (t.isIdentifier(decl)) {
-        const binding = path.scope.getBinding(decl.name);
-        if (binding && t.isVariableDeclarator(binding.path.node)) {
-          const fromInit = extractObjectArg(binding.path.node.init);
-          if (fromInit) configObject = fromInit;
-        }
-      }
     },
   });
 
@@ -260,6 +302,12 @@ export function convertJestToVitest(
       `Detected an embedded 'jest' block inside a craco.config-style file. Only the 'jest' object was migrated. CRACO's webpack/babel sections need separate Vite-equivalent migration.`
     );
   }
+  if (usedNextJest) {
+    pushWarning(
+      'verify',
+      `Detected a next/jest wrapper config. The inner Jest config object was converted, but the Next.js SWC preset also handled TS/JSX transforms, CSS module stubbing, and tsconfig path aliases implicitly. @vitejs/plugin-react and vite-tsconfig-paths were added to cover the common cases; CSS and next/image-style imports may still need mocks in a setup file.`
+    );
+  }
 
   // Output sections.
   const test = newSection();
@@ -282,6 +330,8 @@ export function convertJestToVitest(
   let needsSvgr = false;
   let usesGlobalsTrue = false;
   let hasMonorepoSignal = false;
+  let pendingProjects: t.ArrayExpression | null = null;
+  let pendingEnvOptions: t.Node | null = null;
 
   // Detection flags for behavioral migration warnings.
   let hasMockingSignal = false;
@@ -406,39 +456,12 @@ export function convertJestToVitest(
           setScalar(test, 'dir', source);
         }
         break;
-      case 'testEnvironment': {
-        const literal = t.isStringLiteral(value) ? value.value : '';
-        if (literal === 'jest-environment-jsdom') {
-          setScalar(test, 'environment', `'jsdom'`);
-          needsJsdom = true;
-          warnInfo(`testEnvironment 'jest-environment-jsdom' was normalized to Vitest environment 'jsdom'. Install the 'jsdom' package.`);
-        } else if (literal === 'jest-environment-node') {
-          setScalar(test, 'environment', `'node'`);
-          warnInfo(`testEnvironment 'jest-environment-node' was normalized to Vitest environment 'node'.`);
-        } else {
-          setScalar(test, 'environment', source);
-        }
-        if (literal === 'jsdom') {
-          needsJsdom = true;
-          warnInfo(`environment 'jsdom' requires installing the 'jsdom' package.`);
-        } else if (literal === 'happy-dom') {
-          needsHappyDom = true;
-          warnInfo(`environment 'happy-dom' requires installing the 'happy-dom' package.`);
-        } else if (literal === 'node') {
-          // built-in, no install needed
-        } else if (literal && (literal.startsWith('.') || literal.endsWith('.js') || literal.endsWith('.ts') || literal.endsWith('.cjs') || literal.endsWith('.mjs'))) {
-          warnManual(
-            `Custom testEnvironment file '${literal}' detected. Vitest's environment interface differs from Jest. Port the environment module manually.`
-          );
-        } else if (literal) {
-          warnVerify(
-            `Custom testEnvironment '${literal}' detected. Verify it is published as a Vitest-compatible environment package.`
-          );
-        }
+      case 'testEnvironment':
+        applyTestEnvironment(test, value, source);
         break;
-      }
       case 'testEnvironmentOptions':
-        setScalar(test, 'environmentOptions', source);
+        // Applied at assembly so the environment name is known regardless of key order.
+        pendingEnvOptions = value;
         break;
       case 'testURL': {
         const urlSrc = source;
@@ -910,7 +933,15 @@ export function convertJestToVitest(
         warnInfo(`${key} is unnecessary or removed in Vitest 4.`);
         break;
       case 'projects':
-        setScalar(test, 'projects', source);
+        if (t.isArrayExpression(value)) {
+          pendingProjects = value;
+          warnVerify(
+            `projects entries were remapped to Vitest's { test: { ... } } shape. Neither Jest nor Vitest inherits root options into projects by default; add extends: true to a project if it should inherit the root config.`
+          );
+        } else {
+          test.raw.push(`// MANUAL: projects: ${source},`);
+          warnManual(`projects is not a static array and could not be converted. Define test.projects manually.`);
+        }
         hasMonorepoSignal = true;
         warnInfo(`In Vitest 4, workspaces must be inline via test.projects. Do not generate a vitest.workspace.ts file.`);
         break;
@@ -1020,16 +1051,34 @@ export function convertJestToVitest(
     rootPlugins.push(`tsconfigPaths()`);
     warnManual(`pathsToModuleNameMapper detected. Included vite-tsconfig-paths. Run: npm i -D vite-tsconfig-paths`);
   }
+  if (usedNextJest) {
+    rootImports.unshift(`import react from '@vitejs/plugin-react';`);
+    rootPlugins.unshift(`react()`);
+    if (!needsTsconfigPaths) {
+      // next/jest applied tsconfig path aliases implicitly; keep that behavior.
+      rootImports.push(`import tsconfigPaths from 'vite-tsconfig-paths';`);
+      rootPlugins.push(`tsconfigPaths()`);
+      needsTsconfigPaths = true;
+    }
+  }
 
   // Build define output.
   const defineEntries = Array.from(define.entries()).map(([k, v]) => `${quoteKey(k)}: ${v}`);
 
   // Build coverage block (only if any coverage entries).
+  if (pendingEnvOptions) {
+    applyEnvironmentOptions(test, pendingEnvOptions, '');
+  }
+
   const coverageLines = renderSection(coverage, '  ', format);
   if (coverageLines.length > 0) {
     test.raw.push('coverage: {');
     coverageLines.forEach((line) => test.raw.push(line));
     test.raw.push('},');
+  }
+
+  if (pendingProjects) {
+    renderProjectsLines(pendingProjects).forEach((line) => test.raw.push(line));
   }
 
   if (sequenceEntries.size > 0) {
@@ -1104,6 +1153,7 @@ export function convertJestToVitest(
   if (needsJsdom) tailoredNextSteps.push(`npm install -D jsdom`);
   if (needsHappyDom) tailoredNextSteps.push(`npm install -D happy-dom`);
   if (needsTsconfigPaths) tailoredNextSteps.push(`npm install -D vite-tsconfig-paths`);
+  if (usedNextJest) tailoredNextSteps.push(`npm install -D @vitejs/plugin-react`);
   if (needsSvgr) tailoredNextSteps.push(`npm install -D vite-plugin-svgr`);
   tailoredNextSteps.push(`Update package.json scripts: "test": "vitest"`);
   if (usesGlobalsTrue) {
@@ -1369,6 +1419,229 @@ export function convertJestToVitest(
     if (dynamic) {
       warnManual(`Some collectCoverageFrom entries were dynamic. Verify coverage.include and coverage.exclude manually.`);
     }
+  }
+
+  function applyTestEnvironment(section: ConfigSection, value: t.Node, source: string) {
+    const literal = t.isStringLiteral(value) ? value.value : '';
+    if (literal === 'jest-environment-jsdom') {
+      setScalar(section, 'environment', `'jsdom'`);
+      needsJsdom = true;
+      warnInfo(`testEnvironment 'jest-environment-jsdom' was normalized to Vitest environment 'jsdom'. Install the 'jsdom' package.`);
+    } else if (literal === 'jest-environment-node') {
+      setScalar(section, 'environment', `'node'`);
+      warnInfo(`testEnvironment 'jest-environment-node' was normalized to Vitest environment 'node'.`);
+    } else {
+      setScalar(section, 'environment', source);
+    }
+    if (literal === 'jsdom') {
+      needsJsdom = true;
+      warnInfo(`environment 'jsdom' requires installing the 'jsdom' package.`);
+    } else if (literal === 'happy-dom') {
+      needsHappyDom = true;
+      warnInfo(`environment 'happy-dom' requires installing the 'happy-dom' package.`);
+    } else if (literal === 'node' || literal === 'jest-environment-jsdom' || literal === 'jest-environment-node') {
+      // built-in after normalization, no further checks needed
+    } else if (literal && (literal.startsWith('.') || literal.endsWith('.js') || literal.endsWith('.ts') || literal.endsWith('.cjs') || literal.endsWith('.mjs'))) {
+      warnManual(
+        `Custom testEnvironment file '${literal}' detected. Vitest's environment interface differs from Jest. Port the environment module manually.`
+      );
+    } else if (literal) {
+      warnVerify(
+        `Custom testEnvironment '${literal}' detected. Verify it is published as a Vitest-compatible environment package.`
+      );
+    }
+  }
+
+  // Nest Jest's flat testEnvironmentOptions under the environment name, the shape
+  // Vitest expects (environmentOptions: { jsdom: { ... } }). Flat keys are ignored
+  // by Vitest, so a plain rename would silently do nothing. Must run after the
+  // section's 'environment' scalar is settled.
+  function applyEnvironmentOptions(section: ConfigSection, value: t.Node, context: string) {
+    if (!t.isObjectExpression(value)) {
+      section.raw.push(`// MANUAL: testEnvironmentOptions: ${getCompactSourceCode(value)},`);
+      warnManual(
+        `${context}testEnvironmentOptions is not a static object and could not be namespaced. Nest the options under the environment name manually (e.g. environmentOptions: { jsdom: { ... } }).`
+      );
+      return;
+    }
+    const props: string[] = [];
+    let hadCustomExportConditions = false;
+    for (const p of value.properties) {
+      if (!t.isObjectProperty(p) || p.computed) {
+        section.raw.push(`// MANUAL: testEnvironmentOptions entry ${getCompactSourceCode(p)},`);
+        warnManual(`${context}testEnvironmentOptions contains a dynamic entry that could not be converted.`);
+        continue;
+      }
+      const key = getPropName(p);
+      if (!key) continue;
+      if (key === 'customExportConditions') {
+        hadCustomExportConditions = true;
+        continue;
+      }
+      props.push(`${quoteKey(key)}: ${getSourceCode(p.value as t.Node)}`);
+    }
+    if (hadCustomExportConditions) {
+      warnManual(
+        `${context}testEnvironmentOptions.customExportConditions was dropped: Vitest has no equivalent. If it was the MSW workaround, MSW needs no export-condition override under Vitest. Otherwise set resolve.conditions in the Vite config.`
+      );
+    }
+    if (props.length === 0) return;
+    const inner = `{ ${props.join(', ')} }`;
+    const envValue = section.scalars.get('environment') ?? '';
+    const envLiteral = /^['"](.*)['"]$/.exec(envValue.trim())?.[1] ?? '';
+    if (envLiteral === 'happy-dom') {
+      setScalar(section, 'environmentOptions', `{ happyDOM: ${inner} }`);
+      warnVerify(
+        `${context}testEnvironmentOptions was nested under environmentOptions.happyDOM. Verify each option is supported by happy-dom; Jest and happy-dom option names do not always match.`
+      );
+    } else if (envLiteral === 'jsdom' || envLiteral === '') {
+      setScalar(section, 'environmentOptions', `{ jsdom: ${inner} }`);
+      if (envLiteral === '') {
+        warnVerify(
+          `${context}testEnvironmentOptions was nested under environmentOptions.jsdom, but no testEnvironment was set (Jest defaults to node, which takes no options). Verify the jsdom namespace is the right one.`
+        );
+      } else {
+        warnVerify(
+          `${context}testEnvironmentOptions was nested under environmentOptions.jsdom (Vitest namespaces environment options per environment; flat keys are ignored). Verify each option is a valid jsdom constructor option.`
+        );
+      }
+    } else {
+      section.raw.push(`// MANUAL: testEnvironmentOptions: ${getCompactSourceCode(value)},`);
+      warnManual(
+        `${context}testEnvironmentOptions targets environment ${envValue || 'unknown'}, which takes no options in Vitest (only jsdom and happy-dom do). Port the options manually if the custom environment reads them.`
+      );
+    }
+  }
+
+  function projectLabel(obj: t.ObjectExpression, index: number): string {
+    for (const p of obj.properties) {
+      if (!t.isObjectProperty(p) || p.computed || getPropName(p) !== 'displayName') continue;
+      if (t.isStringLiteral(p.value)) return `'${p.value.value}'`;
+      if (t.isObjectExpression(p.value)) {
+        const nameProp = p.value.properties.find(
+          (pp): pp is t.ObjectProperty => t.isObjectProperty(pp) && getPropName(pp) === 'name'
+        );
+        if (nameProp && t.isStringLiteral(nameProp.value)) return `'${nameProp.value.value}'`;
+      }
+    }
+    return `#${index + 1}`;
+  }
+
+  // Map one static project object's fields into a per-project ConfigSection.
+  // Reuses the same section helpers as the root config so the field semantics match.
+  function convertProjectObject(obj: t.ObjectExpression, label: string): string[] {
+    const proj = newSection();
+    let projEnvOptions: t.Node | null = null;
+    obj.properties.forEach((p) => {
+      if (t.isSpreadElement(p)) {
+        proj.raw.push(`// MANUAL: spread '...${getCompactSourceCode(p.argument)}' could not be statically resolved.`);
+        warnManual(`projects ${label}: spread entries cannot be statically converted. Inline the values.`);
+        return;
+      }
+      if (!t.isObjectProperty(p) || p.computed) {
+        proj.raw.push(`// MANUAL: a dynamic property could not be converted.`);
+        warnManual(`projects ${label}: a dynamic property could not be statically converted.`);
+        return;
+      }
+      const key = getPropName(p);
+      if (!key) return;
+      const value = p.value as t.Node;
+      const source = getSourceCode(value);
+      switch (key) {
+        case 'displayName':
+          if (t.isObjectExpression(value)) {
+            const nameProp = value.properties.find(
+              (pp): pp is t.ObjectProperty => t.isObjectProperty(pp) && getPropName(pp) === 'name'
+            );
+            if (nameProp) setScalar(proj, 'name', getSourceCode(nameProp.value as t.Node));
+            warnInfo(`projects ${label}: displayName color was dropped; a Vitest project name is a plain string.`);
+          } else {
+            setScalar(proj, 'name', source);
+          }
+          break;
+        case 'testMatch':
+          appendArray(proj, 'include', source);
+          break;
+        case 'testRegex':
+          if (!proj.arrays.has('include')) {
+            appendArray(proj, 'include', `['**/*.{test,spec}.{ts,tsx,js,jsx}']`);
+          }
+          proj.noteFor.set('include', `VERIFY: testRegex ${getCompactSourceCode(value)} was converted to default Vitest glob`);
+          warnVerify(`projects ${label}: testRegex was converted to the default Vitest glob. Verify file matching.`);
+          break;
+        case 'testEnvironment':
+          applyTestEnvironment(proj, value, source);
+          break;
+        case 'testEnvironmentOptions':
+          projEnvOptions = value;
+          break;
+        case 'testPathIgnorePatterns':
+          handleRegexIgnorePatterns(value, proj, 'exclude', 'testPathIgnorePatterns');
+          break;
+        case 'roots':
+          if (t.isArrayExpression(value)) {
+            if (value.elements.length > 1) {
+              warnInfo(
+                `projects ${label}: roots had ${value.elements.length} entries; Vitest test.dir takes a single directory. Kept the first.`
+              );
+            }
+            if (value.elements[0]) setScalar(proj, 'dir', getSourceCode(value.elements[0]));
+          } else {
+            setScalar(proj, 'dir', source);
+          }
+          break;
+        case 'setupFiles':
+        case 'setupFilesAfterEnv':
+          appendArray(proj, 'setupFiles', source);
+          if (key === 'setupFilesAfterEnv') {
+            warnVerify(
+              `setupFilesAfterEnv runs after the test framework in Jest; in Vitest setupFiles runs before tests. Move framework-dependent calls (e.g. expect.extend) into a setup that imports vitest first.`
+            );
+          }
+          break;
+        case 'testTimeout':
+        case 'maxConcurrency':
+        case 'silent':
+        case 'clearMocks':
+        case 'restoreMocks':
+        case 'globals':
+          setScalar(proj, key, source);
+          break;
+        default:
+          proj.raw.push(`// MANUAL: ${key}: ${getCompactSourceCode(value)},`);
+          warnManual(`projects ${label}: '${key}' was not converted. Port it into this project's config manually.`);
+      }
+    });
+    if (projEnvOptions) {
+      applyEnvironmentOptions(proj, projEnvOptions, `projects ${label}: `);
+    }
+    return renderSection(proj, '      ', format);
+  }
+
+  // Render the captured Jest projects array as Vitest test.projects lines
+  // (relative indentation; renderSection prefixes the test-block indent).
+  function renderProjectsLines(arr: t.ArrayExpression): string[] {
+    const lines: string[] = ['projects: ['];
+    arr.elements.forEach((el, i) => {
+      if (!el) return;
+      if (t.isStringLiteral(el)) {
+        lines.push(`  '${stripRootDir(el.value)}',`);
+        return;
+      }
+      if (t.isObjectExpression(el)) {
+        const inner = convertProjectObject(el, projectLabel(el, i));
+        lines.push(`  {`);
+        lines.push(`    test: {`);
+        inner.forEach((l) => lines.push(l));
+        lines.push(`    },`);
+        lines.push(`  },`);
+        return;
+      }
+      lines.push(`  // MANUAL: project entry ${getCompactSourceCode(el as t.Node)} could not be statically converted.`);
+      warnManual(`projects entry #${i + 1} is not a static object or string and was not converted.`);
+    });
+    lines.push('],');
+    return lines;
   }
 
   function handleRegexIgnorePatterns(
@@ -1637,14 +1910,35 @@ function formatAstNode(node: t.Node, currentIndent: string): string {
 //   'node_modules/(?!swiper)/'            -> ['swiper']
 //   'node_modules/(?!(@scope/pkg|other))' -> ['@scope/pkg', 'other']
 function extractPackagesFromIgnorePattern(pattern: string): string[] {
-  const negLookahead = /\(\?!\(?([^)]+)\)?/;
-  const match = pattern.match(negLookahead);
-  if (!match) return [];
-  return match[1]
-    .split('|')
-    .map((p) => p.trim())
-    .filter((p) => p.length > 0 && !p.includes('/('))
-    .map((p) => p.replace(/\/$/, ''));
+  // Collect the body of every negative lookahead. Most patterns carry one
+  // ((?!pkg1|pkg2)), but pnpm-style inputs chain them: (?!.pnpm)(?!(pkg1|pkg2)).
+  const bodies: string[] = [];
+  const negLookahead = /\(\?!((?:[^()]|\([^()]*\))*)\)/g;
+  let m: RegExpExecArray | null;
+  while ((m = negLookahead.exec(pattern)) !== null) bodies.push(m[1]);
+
+  const packages: string[] = [];
+  for (const rawBody of bodies) {
+    // Unwrap one wrapping group, capturing or non-capturing, with an optional
+    // path tail: (pkg1|pkg2), (?:pkg1|pkg2)/, (?:pkg1|pkg2)/.* and escaped variants.
+    const wrapped = /^\((?:\?:)?(.*?)\)(?:\\?\/(?:\.\*)?)?$/.exec(rawBody);
+    const body = wrapped ? wrapped[1] : rawBody;
+    for (const rawItem of body.split('|')) {
+      const item = rawItem
+        .trim()
+        .replace(/\\([./])/g, '$1')
+        .replace(/\/\.\*$/, '')
+        .replace(/\.\*$/, '')
+        .replace(/\/$/, '');
+      // .pnpm is a directory artifact of the pnpm layout, not a package name.
+      if (!item || item === '.pnpm') continue;
+      // Items that still carry regex syntax cannot be turned into package names;
+      // skipping them lets the caller's could-not-parse warning fire when nothing survives.
+      if (/[()?*+^$[\]{}\\]/.test(item)) continue;
+      if (!packages.includes(item)) packages.push(item);
+    }
+  }
+  return packages;
 }
 
 function convertSimpleIgnorePatternToGlob(pattern: string): string | null {
