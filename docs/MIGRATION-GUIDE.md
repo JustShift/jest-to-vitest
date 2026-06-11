@@ -76,7 +76,7 @@ Vitest 4 removed or renamed enough fields that a Vitest-3-era converter will pro
 | `poolOptions` removed entirely | Anything formerly under `poolOptions.threads.*` or `poolOptions.forks.*` moves to top-level |
 | `singleThread: true` and `singleFork: true` removed | Equivalent is `maxWorkers: 1` **plus** `isolate: false` |
 | `minWorkers` removed | Drop with explanation. Only `maxWorkers` affects parallelism now |
-| `workerIdleMemoryLimit` → `vmMemoryLimit` | Direct rename |
+| `workerIdleMemoryLimit` → `vmMemoryLimit` | Rename, but `vmMemoryLimit` only applies to the non-default `vmThreads` pool; pair with a verify warning |
 | `poolMatchGlobs` removed | Replaced by `projects` |
 | `environmentMatchGlobs` removed | Replaced by `projects` |
 | `coverage.all` removed | Replaced by explicit `coverage.include` |
@@ -98,7 +98,7 @@ A common real-world Jest pattern is `maxWorkers: 1` for CI. Naively translating 
 | `testPathIgnorePatterns` | `exclude` | Jest entries are regex strings; convert only safe path-like entries to globs and preserve regex-like entries as manual comments[2][8] |
 | `roots` | `dir` (or root) | Vitest uses `dir` to scope test discovery[8] |
 | `testEnvironment` | `environment` | Values: `node`, `jsdom`, `happy-dom`, `edge-runtime`. Note: `jsdom`/`happy-dom` are **not bundled** — emit npm install hint[18] |
-| `testEnvironmentOptions` | `environmentOptions` | Renamed; key sits at the test config level (not nested deeper) |
+| `testEnvironmentOptions` | `environmentOptions` | Renamed, and the shape changes: Jest's options are flat, Vitest namespaces them per environment (`environmentOptions: { jsdom: { url } }`). Flat keys are ignored by Vitest |
 | `testTimeout` | `testTimeout` | Same name, same semantics[8] |
 | `slowTestThreshold` | `slowTestThreshold` | Same key, but Jest uses seconds and Vitest uses milliseconds |
 | `bail` | `bail` | Vitest expects a number; normalize Jest `true` to `1`[19] |

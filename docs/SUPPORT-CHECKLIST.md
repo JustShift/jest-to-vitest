@@ -33,6 +33,7 @@ Legend:
 - `[x] Supported` `export default { ... }`.
 - `[x] Supported` `module.exports = defineConfig({ ... })` or similar first-argument object wrappers.
 - `[x] Supported` `export default defineConfig({ ... })` or similar first-argument object wrappers.
+- `[x] Supported` Wrapper calls whose argument is an identifier, e.g. the standard `next/jest` shape `module.exports = createJestConfig(customJestConfig)`. The identifier is resolved through its binding, same as `module.exports = config`. When the wrapper is detected as `next/jest` (import or require, `.js` suffix included), the output adds `@vitejs/plugin-react` and `vite-tsconfig-paths` plus a verify warning about what the SWC preset handled implicitly.
 - `[x] Supported` TypeScript syntax via Babel's `typescript` plugin.
 - `[x] Supported` JSX syntax via Babel's `jsx` plugin.
 - `[x] Supported` `const config: Config = { ... }; export default config;` (resolved via scope binding lookup).
@@ -62,7 +63,7 @@ Legend:
 - `[x] Supported` `testMatch` -> `test.include`.
 - `[~] Partial` `testPathIgnorePatterns` -> `test.exclude` for safe path-like entries; regex-like entries are preserved as manual comments because Vitest expects globs.
 - `[x] Supported` `testEnvironment` -> `test.environment` with file-path vs package-name classification and known package-name normalization (`jest-environment-jsdom` -> `jsdom`, `jest-environment-node` -> `node`).
-- `[x] Supported` `testEnvironmentOptions` -> `test.environmentOptions`.
+- `[x] Supported` `testEnvironmentOptions` -> `test.environmentOptions`, nested under the resolved environment name (`{ jsdom: { ... } }`, `{ happyDOM: { ... } }`) regardless of key order, at the root and inside `projects` entries. `customExportConditions` is dropped with a manual warning (no Vitest equivalent; the MSW workaround is unnecessary under Vitest). Environments that take no options (node, custom) keep the object as a `// MANUAL:` comment.
 - `[x] Supported` `testTimeout` -> `test.testTimeout`.
 - `[x] Supported` `slowTestThreshold` -> `test.slowTestThreshold` with Jest seconds converted to Vitest milliseconds.
 - `[x] Supported` `bail` -> `test.bail`, with `true` normalized to `1`.
@@ -126,7 +127,7 @@ Legend:
 - `[x] Supported` Custom `preset` emits manual warning.
 - `[x] Supported` Relative `preset` paths emit manual warning with `mergeConfig()` guidance and flag the input as a monorepo signal.
 - `[x] Supported` `transform` entries are classified per-entry: `ts-jest`/`babel-jest` are dropped with a summary info warning; file-stub transformers (`jest-transform-stub`, `jest-svg-transformer`, etc.) emit verify warnings; custom transformers emit manual warnings.
-- `[x] Supported` `transformIgnorePatterns` extracts package names from `node_modules/(?!(pkg|other)/)` shapes into `test.server.deps.inline`.
+- `[x] Supported` `transformIgnorePatterns` extracts package names into `test.server.deps.inline` from plain, capturing, and non-capturing group shapes (`(?!pkg|other)`, `(?!(pkg|other)/)`, `(?!(?:pkg|other)/)`), including scoped packages, escaped dots/slashes, and pnpm-style chained lookaheads (`(?!.pnpm)(?!(...))`, with `.pnpm` itself excluded as a directory artifact). Items that still carry regex syntax (e.g. `(jest-)?react-native`) are skipped so the could-not-parse verify warning fires instead of emitting garbage names.
 
 ## Mocking Behavior Fields
 
@@ -148,7 +149,7 @@ Legend:
 - `[x] Supported` `maxWorkers` -> `test.maxWorkers`.
 - `[x] Supported` `maxWorkers: 1` also emits `isolate: false` and verify warning.
 - `[x] Supported` `runInBand` -> `maxWorkers: 1, isolate: false`.
-- `[x] Supported` `workerIdleMemoryLimit` -> `vmMemoryLimit`.
+- `[~] Partial` `workerIdleMemoryLimit` -> `vmMemoryLimit`. Mapped silently, but `vmMemoryLimit` only applies to the non-default `vmThreads` pool, so the setting may be inert; needs a verify warning.
 - `[x] Supported` `minWorkers` is dropped with info warning.
 - `[x] Supported` `poolMatchGlobs` and `environmentMatchGlobs` are dropped with info warning.
 - `[x] Supported` `testSequencer` is preserved as a `// MANUAL:` comment with manual warning about Vitest sequencer interface differences.
@@ -183,7 +184,7 @@ Legend:
 
 ## Multi-Project And Monorepo Fields
 
-- `[x] Supported` `projects` -> `test.projects`.
+- `[x] Supported` `projects` -> `test.projects`: each static project object is remapped to Vitest's `{ test: { ... } }` shape (`displayName` -> `name`, `testMatch` -> `include`, `testEnvironment` -> `environment` with normalization, `setupFiles`/`setupFilesAfterEnv`, `testPathIgnorePatterns` -> `exclude`, `roots` -> `dir`, plus direct scalars like `testTimeout`). Glob string entries pass through with `<rootDir>` normalized. Unmappable project fields become `// MANUAL:` comments with per-project warnings; a verify warning notes that neither runner inherits root options without `extends: true`.
 - `[x] Supported` `displayName` -> `test.name`.
 - `[x] Supported` `projects` warning mentions Vitest 4 inline workspace requirement.
 - `[x] Supported` Relative shared `preset` paths flag the input as a monorepo signal and emit `mergeConfig()` guidance.
