@@ -6,7 +6,7 @@
   the release workflow extracts that exact section for the GitHub Release notes.
 -->
 
-## Unreleased
+## 0.4.0 — 2026-06-13
 
 - feat(converter): **stable warning codes** — every `Warning` now carries a
   `code` field (e.g. `discovery.testRegex`, `resolve.aliasRegex`,
