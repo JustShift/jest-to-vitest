@@ -74,7 +74,9 @@ Legend:
 - `[x] Supported` `testFailureExitCode` is dropped with info warning.
 - `[x] Supported` `notify` / `notifyMode` are dropped with info warning.
 - `[x] Supported` `sandboxInjectedGlobals` is dropped with info warning.
-- `[~] Partial` `testRegex` -> default glob with verify warning, but no true regex-to-glob conversion.
+- `[x] Supported` `testRegex` -> equivalent glob(s) for translatable patterns (simple suffix matchers like `\.test\.tsx?$`, `__tests__/` directory matchers, extension alternates `[jt]sx?`/`(js|jsx|ts|tsx)`, and the classic Jest/CRA default `(/__tests__/.*|(\.|/)(test|spec))\.[jt]sx?$`), with a verify warning. Untranslatable patterns (lookarounds, quantified groups, residual regex syntax) fall back to the default Vitest glob with a verify warning, at the root and inside `projects` entries.
+- `[x] Supported` `testPathDirs` (deprecated Jest name for `roots`) is treated as `roots` with an info warning about the deprecation.
+- `[x] Supported` `setupTestFrameworkScriptFile` (deprecated Jest name for `setupFilesAfterEnv`) is treated as `setupFilesAfterEnv` (including the ordering verify warning) with an info warning about the deprecation.
 - `[~] Partial` `roots` -> `test.dir`, but only the first array item is used (with an info warning when multiple are present).
 
 ## Module Resolution Fields
@@ -118,7 +120,7 @@ Legend:
 - `[x] Supported` Tailored next step installs the provider that matches detected coverage config (`@vitest/coverage-v8` or `@vitest/coverage-istanbul`).
 - `[x] Supported` `coverage.all` carryover from Vitest 3 emits info warning about Vitest 4 removal.
 - `[x] Supported` `coverage.ignoreEmptyLines` carryover emits info warning about Vitest 4 removal.
-- `[~] Partial` `<rootDir>` is stripped through generic source normalization.
+- `[x] Supported` `<rootDir>` is normalized position-aware (`normalizeRootDir`): leading `<rootDir>/` -> `./`, a bare `<rootDir>` -> `.`, occurrences after a `/` or regex anchor collapse, mid-string occurrences keep a single separator. Package names and strings without the token are untouched.
 
 ## Transform And Compilation Fields
 
@@ -126,7 +128,7 @@ Legend:
 - `[x] Supported` `preset: 'babel-jest'` is removed with info warning.
 - `[x] Supported` Custom `preset` emits manual warning.
 - `[x] Supported` Relative `preset` paths emit manual warning with `mergeConfig()` guidance and flag the input as a monorepo signal.
-- `[x] Supported` `transform` entries are classified per-entry: `ts-jest`/`babel-jest` are dropped with a summary info warning; file-stub transformers (`jest-transform-stub`, `jest-svg-transformer`, etc.) emit verify warnings; custom transformers emit manual warnings.
+- `[x] Supported` `transform` entries are classified per-entry: `ts-jest`/`babel-jest`/`@swc/jest` are dropped with a summary info warning (Vite handles the transform natively); `@vue/vue3-jest`/`vue-jest` and `svelte-jester` emit concrete plugin suggestions (`@vitejs/plugin-vue`, `@sveltejs/vite-plugin-svelte`) as verify warnings; file-stub transformers (`jest-transform-stub`, `jest-svg-transformer`, etc.) emit verify warnings; custom transformers emit manual warnings.
 - `[x] Supported` `transformIgnorePatterns` extracts package names into `test.server.deps.inline` from plain, capturing, and non-capturing group shapes (`(?!pkg|other)`, `(?!(pkg|other)/)`, `(?!(?:pkg|other)/)`), including scoped packages, escaped dots/slashes, and pnpm-style chained lookaheads (`(?!.pnpm)(?!(...))`, with `.pnpm` itself excluded as a directory artifact). Items that still carry regex syntax (e.g. `(jest-)?react-native`) are skipped so the could-not-parse verify warning fires instead of emitting garbage names.
 
 ## Mocking Behavior Fields
@@ -149,7 +151,8 @@ Legend:
 - `[x] Supported` `maxWorkers` -> `test.maxWorkers`.
 - `[x] Supported` `maxWorkers: 1` also emits `isolate: false` and verify warning.
 - `[x] Supported` `runInBand` -> `maxWorkers: 1, isolate: false`.
-- `[~] Partial` `workerIdleMemoryLimit` -> `vmMemoryLimit`. Mapped silently, but `vmMemoryLimit` only applies to the non-default `vmThreads` pool, so the setting may be inert; needs a verify warning.
+- `[x] Supported` `workerThreads: true` (Jest 30) -> `test.pool: 'threads'` with an info warning; `workerThreads: false` is omitted (Vitest's default `forks` pool already uses child processes).
+- `[x] Supported` `workerIdleMemoryLimit` -> `vmMemoryLimit`, with an inline `// VERIFY:` note and a verify warning that `vmMemoryLimit` only applies to the non-default `vmThreads` pool.
 - `[x] Supported` `minWorkers` is dropped with info warning.
 - `[x] Supported` `poolMatchGlobs` and `environmentMatchGlobs` are dropped with info warning.
 - `[x] Supported` `testSequencer` is preserved as a `// MANUAL:` comment with manual warning about Vitest sequencer interface differences.
@@ -165,7 +168,9 @@ Legend:
 - `[x] Supported` `verbose: true` -> `reporters: ['verbose']`.
 - `[x] Supported` `verbose: false` -> `reporters: ['default']`.
 - `[x] Supported` `silent` -> `test.silent`.
-- `[x] Supported` `reporters` direct array mapping with verify warning that Jest and Vitest reporter names differ.
+- `[x] Supported` `jest-junit` (bare or `['jest-junit', { outputDirectory, outputName, outputFile }]`) maps to Vitest's built-in `['junit', { outputFile }]`; unmappable jest-junit options emit a verify warning, dynamic option objects are copied verbatim with a verify warning.
+- `[x] Supported` `github-actions` maps to Vitest's built-in `'github-actions'` reporter (options dropped with an info note).
+- `[x] Supported` Remaining reporters are copied verbatim; the verify warning fires only when a copied name is not a Vitest built-in (`default`, `verbose`, `dot`, `json`, `junit`, `tap`, `tap-flat`, `html`, `hanging-process`, `github-actions`).
 - `[x] Supported` `verbose` and `reporters` together merge into a single `test.reporters` array instead of producing duplicate keys.
 
 ## Snapshot Fields
@@ -180,7 +185,7 @@ Legend:
 ## Watch Fields
 
 - `[x] Supported` `watchPlugins` emits manual warning.
-- `[~] Partial` `watchPathIgnorePatterns` emits manual warning pointing to Vite's `server.watch.ignored`.
+- `[x] Supported` `watchPathIgnorePatterns` with static string patterns emits the actual root-level `server.watch.ignored` block (globs anchored with `**/`); regex/dynamic entries fall back to a manual warning.
 
 ## Multi-Project And Monorepo Fields
 
@@ -225,10 +230,9 @@ Legend:
 
 ## Path Normalization
 
-- `[x] Supported` Generic `<rootDir>` replacement with `./`.
+- `[x] Supported` Path-aware `<rootDir>` normalizer (`normalizeRootDir`, exported): leading `<rootDir>/` -> `./`, a bare `<rootDir>` -> `.`, occurrences after `/` or regex anchors (`^`, `(`, `|`) collapse, mid-string occurrences keep a single separator. The code-level variant (`normalizeRootDirInCode`) applies the same rules using the preceding quote character as string-start context.
 - `[x] Supported` Relative file aliases are rewritten with `path.resolve(__dirname, ...)` for stable Vite resolution.
-- `[~] Partial` Works on generated source strings, not through a path-aware normalizer.
-- `[~] Partial` Does not distinguish globs, module paths, package names, and file-system paths in all cases.
+- `[x] Supported` Package names and strings without the token are untouched; globs keep their (valid) `./` prefix.
 
 ## Warning Categories And UI
 
@@ -282,11 +286,20 @@ Legend:
 
 ## Remaining Backlog (Lower Priority)
 
-- `[~] Partial` `testRegex` regex-to-glob conversion (currently falls back to a default Vitest glob with a verify warning; inline note attached).
 - `[~] Partial` `__mocks__` warning is currently manual-tier; the guide places it at verify-tier.
-- `[~] Partial` Path-aware normalizer for `<rootDir>` substitutions (currently a string replace; does not distinguish globs from file paths from package names).
-- `[~] Partial` Extend `tests/converter.test.ts` with the remaining six PROBLEM GUIDE use cases as standalone fixture-based tests, plus real-world fixtures (Next.js, Nx, CRA, Remix, T3, Vue + craco, Vite + jest hybrid).
-- `[~] Partial` `watchPathIgnorePatterns` only emits a manual warning pointing to Vite's `server.watch.ignored`.
+- `[~] Partial` Extend `tests/converter.test.ts` with the remaining six PROBLEM GUIDE use cases as standalone fixture-based tests. (Real-world fixtures are done: `tests/fixtures/` covers Next.js, Nx, CRA, Remix, T3, Vue + craco, and a Vite + jest hybrid, snapshot-tested in `tests/fixtures.test.ts`.)
+
+## 2026-06-13 additions
+
+- `[x] Supported` Stable warning codes: every `Warning` carries a `code` field (e.g. `discovery.testRegex`, `resolve.aliasRegex`, `mocks.hoisting`), aligned with the `@shiftkit/webpack-to-vite` warning model; the CLI prints `[tier] (code) message`.
+- `[x] Supported` Multi-statement static evaluation: `const config = {...}; config.x = y; module.exports = config` (module level, via binding reference paths) and `module.exports = () => { const config = {...}; config.x = y; return config; }` (function bodies, syntactic) fold member assignments into the config object; later assignments win; if-guarded assignments fold unconditionally with a callout in the `config.multiStatement` verify warning. No user code is ever executed.
+- `[x] Supported` Non-trivial `moduleNameMapper` keys (mid-string capture groups) emit Vite's array-form regex alias `{ find: /regex/, replacement: '...$1' }` with a verify warning; the alias block switches to array form only when regex entries exist.
+- `[x] Supported` `testEnvironment: '@happy-dom/jest-environment'` is normalized to `'happy-dom'` (sets `needsHappyDom`), alongside the existing `jest-environment-jsdom`/`jest-environment-node` normalization.
+- `[x] Supported` Package-manager-aware next steps: `ConvertOptions.packageManager` (`npm` default for the web/API path); the CLI detects `pnpm-lock.yaml`/`yarn.lock`/`bun.lockb` and accepts `--pm` to override. Uninstall/install commands and the post-apply hint all follow the selected manager.
+- `[x] Supported` `--target-vitest 3|4` (API: `ConvertOptions.targetVitest`): 3 emits the `test.workspace` key instead of inline `projects`, passes `poolOptions` through verbatim, and pins install commands/`--apply` ranges to `@^3`. 4 (default) keeps the Vitest-4-first output.
+- `[x] Supported` `--apply` rewrites `'@testing-library/jest-dom'` (and `/extend-expect`) imports to `'@testing-library/jest-dom/vitest'` in detected setup files (`flags.setupFiles`), behind the existing dirty-tree guard.
+- `[x] Supported` No-`eval` source gate test (`tests/no-eval.test.ts`): the converter source must never contain `eval(`, `new Function`, or `vm.runInContext` (mirrors webpack-to-vite; the ShiftKit production CSP omits `'unsafe-eval'`).
+- `[x] Supported` Real-world fixture suite: `tests/fixtures/` + `tests/fixtures.test.ts` snapshot the full output, warning report, and flags for Next.js, Nx, CRA (package.json#jest), Remix, T3, Vue + craco, and Vite + jest hybrid configs, and assert determinism + parseable TypeScript output.
 
 ## CLI surface
 
@@ -298,6 +311,9 @@ Legend:
 - `[x] Supported` `--json` emits the conversion (or apply) result as JSON for CI integration.
 - `[x] Supported` `--no-format` disables output pretty-printing (escape hatch).
 - `[x] Supported` `--strict` exits non-zero when any manual-tier warning is emitted.
+- `[x] Supported` `--pm npm|pnpm|yarn|bun` overrides the lockfile-detected package manager used in next-steps commands and the post-apply hint.
+- `[x] Supported` `--target-vitest 3|4` selects the output target (workspace key + poolOptions passthrough + `@^3` ranges for 3).
+- `[x] Supported` `--apply` rewrites the `@testing-library/jest-dom` import to `/vitest` in detected setup files and reports the touched files (also in `--json` as `setupFilesRewritten`).
 - `[x] Supported` GitHub Action (`action.yml` at repo root) wraps the CLI; exposes `output-file`, `warning-count`, `manual-count`, `json` outputs.
 
 ## Output formatting

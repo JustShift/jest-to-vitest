@@ -1,0 +1,468 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`real-world fixture suite > cra.package.json > snapshots the converted vitest.config.ts output 1`] = `
+"import { defineConfig } from 'vitest/config';
+
+export default defineConfig({
+  resolve: {
+    alias: {
+      'react-native': 'react-native-web',
+    },
+    extensions: ['.web.js', '.js', '.web.ts', '.ts', '.web.tsx', '.tsx', '.json', '.web.jsx', '.jsx', '.node'],
+  },
+  test: {
+    dir: './src',
+    environment: 'jsdom',
+    css: false,
+    mockReset: true, // VERIFY: mapped from Jest resetMocks — verify mock implementation reset semantics
+    setupFiles: ['react-app-polyfill/jsdom', './src/setupTests.ts'], // VERIFY: includes setupFilesAfterEnv — runs BEFORE tests in Vitest (unlike Jest); move framework-dependent calls accordingly
+    include: [
+      './src/**/__tests__/**/*.{js,jsx,ts,tsx}',
+      './src/**/*.{spec,test}.{js,jsx,ts,tsx}',
+    ],
+    coverage: {
+      include: ['src/**/*.{js,jsx,ts,tsx}'],
+      exclude: ['src/**/*.d.ts'],
+    },
+  },
+});
+
+// Next steps after migration:
+// 1. npm uninstall jest @types/jest ts-jest babel-jest
+// 2. npm install -D vitest
+// 3. npm install -D @vitest/coverage-v8
+// 4. npm install -D jsdom
+// 5. Update package.json scripts: "test": "vitest""
+`;
+
+exports[`real-world fixture suite > cra.package.json > snapshots the detection flags 1`] = `
+{
+  "embeddedParent": null,
+  "monorepo": false,
+  "needsCoverage": true,
+  "needsHappyDom": false,
+  "needsJsdom": true,
+  "needsSvgr": false,
+  "needsTsconfigPaths": false,
+  "setupFiles": [
+    "react-app-polyfill/jsdom",
+    "./src/setupTests.ts",
+  ],
+  "targetVitest": 4,
+  "usesGlobalsTrue": false,
+}
+`;
+
+exports[`real-world fixture suite > cra.package.json > snapshots the warning report (tier:code → message) 1`] = `
+[
+  "info:coverage.include — Negated collectCoverageFrom patterns were moved to coverage.exclude.",
+  "verify:setup.order — setupFilesAfterEnv runs after the test framework in Jest; in Vitest setupFiles runs before tests. Move framework-dependent calls (e.g. expect.extend) into a setup that imports vitest first.",
+  "info:env.environment — environment 'jsdom' requires installing the 'jsdom' package.",
+  "manual:transform.custom — transform entry '^.+\\.(js|jsx|mjs|cjs|ts|tsx)$' -> <rootDir>/config/jest/babelTransform.js has no direct equivalent. Replace with a Vite plugin or migrate the transformer.",
+  "manual:transform.custom — transform entry '^.+\\.css$' -> <rootDir>/config/jest/cssTransform.js has no direct equivalent. Replace with a Vite plugin or migrate the transformer.",
+  "manual:transform.custom — transform entry '^(?!.*\\.(js|jsx|mjs|cjs|ts|tsx|css|json)$)' -> <rootDir>/config/jest/fileTransform.js has no direct equivalent. Replace with a Vite plugin or migrate the transformer.",
+  "verify:transform.ignorePatterns — transformIgnorePatterns entry "[/\\\\\\\\]node_modules[/\\\\\\\\].+\\\\.(js|jsx|mjs|cjs|ts|tsx)$" could not be parsed into package names. Add packages manually to test.server.deps.inline.",
+  "verify:transform.ignorePatterns — transformIgnorePatterns entry "^.+\\\\.module\\\\.(css|sass|scss)$" could not be parsed into package names. Add packages manually to test.server.deps.inline.",
+  "manual:resolve.modulePaths — modulePaths has no direct Vitest equivalent. For source aliasing add entries to resolve.alias; for dependency resolution use test.deps.moduleDirectories.",
+  "verify:resolve.cssStub — CSS stub for ^.+\\.module\\.(css|sass|scss)$ detected. Set test.css: false in Vitest, or use a Vite plugin if you need CSS modules typed.",
+  "manual:watch.plugins — watchPlugins has no equivalent in Vitest.",
+  "verify:mocks.reset — resetMocks was mapped to Vitest mockReset. Verify mock implementation reset behavior on first run.",
+  "verify:mocks.hoisting — vi.mock() factories are hoisted to the top of the file. Variables declared in the surrounding scope are NOT available inside the factory. Wrap them with vi.hoisted() or move them inside the factory.",
+  "info:behavior.hooks — Hook execution order: Vitest defaults to parallel hook execution within a file. If your tests rely on Jest's strict sequential beforeAll/beforeEach order, set sequence.hooks: 'list' on the test config.",
+  "info:setup.done — Vitest does not support the 'done' callback in tests or hooks. Convert any 'done' usage to async/await or return a promise.",
+  "info:behavior.currentTestName — If any code reads expect.getState().currentTestName, note Jest joins describe/test names with a space while Vitest uses ' > '. Adjust string-matching logic accordingly.",
+  "info:snapshot.regen — Snapshot regeneration is required on first run (format change from Jest).",
+]
+`;
+
+exports[`real-world fixture suite > next-js.jest.config.js > snapshots the converted vitest.config.ts output 1`] = `
+"import { defineConfig } from 'vitest/config';
+import react from '@vitejs/plugin-react';
+import path from 'node:path';
+import tsconfigPaths from 'vite-tsconfig-paths';
+
+export default defineConfig({
+  plugins: [react(), tsconfigPaths()],
+  resolve: {
+    alias: {
+      '@/components': path.resolve(__dirname, './components'),
+      '@/pages': path.resolve(__dirname, './pages'),
+    },
+  },
+  test: {
+    environment: 'jsdom',
+    css: false,
+    setupFiles: ['./jest.setup.js'], // VERIFY: includes setupFilesAfterEnv — runs BEFORE tests in Vitest (unlike Jest); move framework-dependent calls accordingly
+    exclude: ['node_modules/**', '.next/**'],
+    coverage: {
+      include: ['**/*.{js,jsx,ts,tsx}'],
+      exclude: ['**/*.d.ts', '**/node_modules/**', '**/.next/**'],
+    },
+  },
+});
+
+// Next steps after migration:
+// 1. npm uninstall jest @types/jest ts-jest babel-jest
+// 2. npm install -D vitest
+// 3. npm install -D @vitest/coverage-v8
+// 4. npm install -D jsdom
+// 5. npm install -D vite-tsconfig-paths
+// 6. npm install -D @vitejs/plugin-react
+// 7. Update package.json scripts: "test": "vitest""
+`;
+
+exports[`real-world fixture suite > next-js.jest.config.js > snapshots the detection flags 1`] = `
+{
+  "embeddedParent": null,
+  "monorepo": false,
+  "needsCoverage": true,
+  "needsHappyDom": false,
+  "needsJsdom": true,
+  "needsSvgr": false,
+  "needsTsconfigPaths": true,
+  "setupFiles": [
+    "./jest.setup.js",
+  ],
+  "targetVitest": 4,
+  "usesGlobalsTrue": false,
+}
+`;
+
+exports[`real-world fixture suite > next-js.jest.config.js > snapshots the warning report (tier:code → message) 1`] = `
+[
+  "verify:config.nextJest — Detected a next/jest wrapper config. The inner Jest config object was converted, but the Next.js SWC preset also handled TS/JSX transforms, CSS module stubbing, and tsconfig path aliases implicitly. @vitejs/plugin-react and vite-tsconfig-paths were added to cover the common cases; CSS and next/image-style imports may still need mocks in a setup file.",
+  "verify:setup.order — setupFilesAfterEnv runs after the test framework in Jest; in Vitest setupFiles runs before tests. Move framework-dependent calls (e.g. expect.extend) into a setup that imports vitest first.",
+  "info:env.environment — testEnvironment 'jest-environment-jsdom' was normalized to Vitest environment 'jsdom'. Install the 'jsdom' package.",
+  "verify:resolve.alias — Relative alias '@/components' was rewritten with path.resolve(__dirname, ...) so Vite resolves it from the config file location.",
+  "verify:resolve.alias — Relative alias '@/pages' was rewritten with path.resolve(__dirname, ...) so Vite resolves it from the config file location.",
+  "verify:resolve.cssStub — CSS stub for \\.(css|less|scss|sass)$ detected. Set test.css: false in Vitest, or use a Vite plugin if you need CSS modules typed.",
+  "info:coverage.include — Negated collectCoverageFrom patterns were moved to coverage.exclude.",
+  "info:behavior.hooks — Hook execution order: Vitest defaults to parallel hook execution within a file. If your tests rely on Jest's strict sequential beforeAll/beforeEach order, set sequence.hooks: 'list' on the test config.",
+  "info:setup.done — Vitest does not support the 'done' callback in tests or hooks. Convert any 'done' usage to async/await or return a promise.",
+  "info:behavior.currentTestName — If any code reads expect.getState().currentTestName, note Jest joins describe/test names with a space while Vitest uses ' > '. Adjust string-matching logic accordingly.",
+  "info:snapshot.regen — Snapshot regeneration is required on first run (format change from Jest).",
+]
+`;
+
+exports[`real-world fixture suite > nx-lib.jest.config.ts > snapshots the converted vitest.config.ts output 1`] = `
+"import { defineConfig } from 'vitest/config';
+
+export default defineConfig({
+  resolve: {
+    extensions: ['.ts', '.tsx', '.js', '.jsx'],
+  },
+  test: {
+    name: 'shared-ui',
+    environment: 'jsdom',
+    setupFiles: ['./src/test-setup.ts'], // VERIFY: includes setupFilesAfterEnv — runs BEFORE tests in Vitest (unlike Jest); move framework-dependent calls accordingly
+    snapshotSerializers: ['jest-serializer-html'],
+    coverage: {
+      reportsDirectory: '../../coverage/libs/shared-ui',
+    },
+  },
+});
+
+// Next steps after migration:
+// 1. npm uninstall jest @types/jest ts-jest babel-jest
+// 2. npm install -D vitest
+// 3. npm install -D @vitest/coverage-v8
+// 4. npm install -D jsdom
+// 5. Update package.json scripts: "test": "vitest"
+// 6. Monorepo detected: share config via mergeConfig() from 'vitest/config' instead of preset paths"
+`;
+
+exports[`real-world fixture suite > nx-lib.jest.config.ts > snapshots the detection flags 1`] = `
+{
+  "embeddedParent": null,
+  "monorepo": true,
+  "needsCoverage": true,
+  "needsHappyDom": false,
+  "needsJsdom": true,
+  "needsSvgr": false,
+  "needsTsconfigPaths": false,
+  "setupFiles": [
+    "./src/test-setup.ts",
+  ],
+  "targetVitest": 4,
+  "usesGlobalsTrue": false,
+}
+`;
+
+exports[`real-world fixture suite > nx-lib.jest.config.ts > snapshots the warning report (tier:code → message) 1`] = `
+[
+  "manual:transform.preset — Relative preset '../../jest.preset.js' detected. In Vitest, share config via mergeConfig() from 'vitest/config' rather than presets.",
+  "verify:setup.order — setupFilesAfterEnv runs after the test framework in Jest; in Vitest setupFiles runs before tests. Move framework-dependent calls (e.g. expect.extend) into a setup that imports vitest first.",
+  "manual:globals.define — Jest 'globals' object values were moved to root-level Vite 'define'. Note that 'globals: true' in Vitest exposes test APIs and is unrelated to injected constants.",
+  "manual:transform.custom — transform entry '^(?!.*\\.(js|jsx|ts|tsx|css|json)$)' -> @nx/react/plugins/jest has no direct equivalent. Replace with a Vite plugin or migrate the transformer.",
+  "info:transform.dropped — Dropped 1 ts-jest/babel-jest/@swc/jest transform entry. Vite handles them natively.",
+  "info:env.environment — environment 'jsdom' requires installing the 'jsdom' package.",
+  "info:behavior.hooks — Hook execution order: Vitest defaults to parallel hook execution within a file. If your tests rely on Jest's strict sequential beforeAll/beforeEach order, set sequence.hooks: 'list' on the test config.",
+  "info:setup.done — Vitest does not support the 'done' callback in tests or hooks. Convert any 'done' usage to async/await or return a promise.",
+  "info:behavior.currentTestName — If any code reads expect.getState().currentTestName, note Jest joins describe/test names with a space while Vitest uses ' > '. Adjust string-matching logic accordingly.",
+  "info:snapshot.regen — Snapshot regeneration is required on first run (format change from Jest).",
+]
+`;
+
+exports[`real-world fixture suite > remix.jest.config.js > snapshots the converted vitest.config.ts output 1`] = `
+"import { defineConfig } from 'vitest/config';
+import path from 'node:path';
+
+export default defineConfig({
+  resolve: {
+    alias: {
+      '~': path.resolve(__dirname, './app'),
+    },
+  },
+  server: {
+    watch: { ignored: ['**/node_modules/**', '**/build/**', '**/public/build/**'] }, // from watchPathIgnorePatterns
+  },
+  test: {
+    environment: 'jsdom',
+    setupFiles: ['./test/setup-test-env.ts'], // VERIFY: includes setupFilesAfterEnv — runs BEFORE tests in Vitest (unlike Jest); move framework-dependent calls accordingly
+    include: ['./app/**/*.test.{ts,tsx}'],
+    coverage: {
+      reporter: ['text', 'lcov'],
+      include: ['app/**/*.{ts,tsx}'],
+      exclude: ['app/entry.*.tsx'],
+    },
+  },
+});
+
+// Next steps after migration:
+// 1. npm uninstall jest @types/jest ts-jest babel-jest
+// 2. npm install -D vitest
+// 3. npm install -D @vitest/coverage-v8
+// 4. npm install -D jsdom
+// 5. Update package.json scripts: "test": "vitest""
+`;
+
+exports[`real-world fixture suite > remix.jest.config.js > snapshots the detection flags 1`] = `
+{
+  "embeddedParent": null,
+  "monorepo": false,
+  "needsCoverage": true,
+  "needsHappyDom": false,
+  "needsJsdom": true,
+  "needsSvgr": false,
+  "needsTsconfigPaths": false,
+  "setupFiles": [
+    "./test/setup-test-env.ts",
+  ],
+  "targetVitest": 4,
+  "usesGlobalsTrue": false,
+}
+`;
+
+exports[`real-world fixture suite > remix.jest.config.js > snapshots the warning report (tier:code → message) 1`] = `
+[
+  "info:env.environment — environment 'jsdom' requires installing the 'jsdom' package.",
+  "verify:setup.order — setupFilesAfterEnv runs after the test framework in Jest; in Vitest setupFiles runs before tests. Move framework-dependent calls (e.g. expect.extend) into a setup that imports vitest first.",
+  "manual:transform.custom — transform entry '^.+\\.tsx?$' -> esbuild-jest has no direct equivalent. Replace with a Vite plugin or migrate the transformer.",
+  "verify:resolve.alias — Relative alias '~' was rewritten with path.resolve(__dirname, ...) so Vite resolves it from the config file location.",
+  "info:watch.ignored — watchPathIgnorePatterns was mapped to Vite's server.watch.ignored in the emitted config.",
+  "info:coverage.include — Negated collectCoverageFrom patterns were moved to coverage.exclude.",
+  "info:behavior.hooks — Hook execution order: Vitest defaults to parallel hook execution within a file. If your tests rely on Jest's strict sequential beforeAll/beforeEach order, set sequence.hooks: 'list' on the test config.",
+  "info:setup.done — Vitest does not support the 'done' callback in tests or hooks. Convert any 'done' usage to async/await or return a promise.",
+  "info:behavior.currentTestName — If any code reads expect.getState().currentTestName, note Jest joins describe/test names with a space while Vitest uses ' > '. Adjust string-matching logic accordingly.",
+  "info:snapshot.regen — Snapshot regeneration is required on first run (format change from Jest).",
+]
+`;
+
+exports[`real-world fixture suite > t3-app.jest.config.cjs > snapshots the converted vitest.config.ts output 1`] = `
+"import { defineConfig } from 'vitest/config';
+import path from 'node:path';
+
+export default defineConfig({
+  resolve: {
+    alias: {
+      '~': path.resolve(__dirname, './src'),
+    },
+  },
+  test: {
+    environment: 'node',
+    include: [
+      '**/__tests__/**/*.{js,jsx,ts,tsx}',
+      '**/*.test.{js,jsx,ts,tsx}',
+      '**/*.spec.{js,jsx,ts,tsx}',
+      '**/test.{js,jsx,ts,tsx}',
+      '**/spec.{js,jsx,ts,tsx}',
+    ], // VERIFY: converted from testRegex '(/__tests__/.*|(\\\\.|/)(test|spec))\\\\.[jt]sx?$' — verify file matching
+    exclude: ['.next/**', 'node_modules/**'],
+    coverage: {
+      enabled: true,
+      provider: 'v8',
+    },
+  },
+});
+
+// Next steps after migration:
+// 1. npm uninstall jest @types/jest ts-jest babel-jest
+// 2. npm install -D vitest
+// 3. npm install -D @vitest/coverage-v8
+// 4. Update package.json scripts: "test": "vitest""
+`;
+
+exports[`real-world fixture suite > t3-app.jest.config.cjs > snapshots the detection flags 1`] = `
+{
+  "embeddedParent": null,
+  "monorepo": false,
+  "needsCoverage": true,
+  "needsHappyDom": false,
+  "needsJsdom": false,
+  "needsSvgr": false,
+  "needsTsconfigPaths": false,
+  "setupFiles": [],
+  "targetVitest": 4,
+  "usesGlobalsTrue": false,
+}
+`;
+
+exports[`real-world fixture suite > t3-app.jest.config.cjs > snapshots the warning report (tier:code → message) 1`] = `
+[
+  "verify:config.multiStatement — 2 property assignment(s) (config.x = ...) were statically folded into the config object.",
+  "info:transform.preset — preset 'ts-jest' removed. Vitest handles TypeScript natively.",
+  "info:transform.dropped — Dropped 1 ts-jest/babel-jest/@swc/jest transform entry. Vite handles them natively.",
+  "verify:resolve.alias — Relative alias '~' was rewritten with path.resolve(__dirname, ...) so Vite resolves it from the config file location.",
+  "verify:discovery.testRegex — testRegex '(/__tests__/.*|(\\\\.|/)(test|spec))\\\\.[jt]sx?$' was converted to glob pattern(s): **/__tests__/**/*.{js,jsx,ts,tsx}, **/*.test.{js,jsx,ts,tsx}, **/*.spec.{js,jsx,ts,tsx}, **/test.{js,jsx,ts,tsx}, **/spec.{js,jsx,ts,tsx}. Regexes and globs match differently on edge cases — verify the matched file set.",
+  "info:globals.define — globals['ts-jest'] dropped. Vitest handles TypeScript via Vite; no ts-jest config needed.",
+  "manual:globals.define — Jest 'globals' object values were moved to root-level Vite 'define'. Note that 'globals: true' in Vitest exposes test APIs and is unrelated to injected constants.",
+  "info:behavior.currentTestName — If any code reads expect.getState().currentTestName, note Jest joins describe/test names with a space while Vitest uses ' > '. Adjust string-matching logic accordingly.",
+  "info:snapshot.regen — Snapshot regeneration is required on first run (format change from Jest).",
+]
+`;
+
+exports[`real-world fixture suite > vite-jest-hybrid.jest.config.ts > snapshots the converted vitest.config.ts output 1`] = `
+"import { defineConfig } from 'vitest/config';
+import path from 'node:path';
+import svgr from 'vite-plugin-svgr';
+
+export default defineConfig({
+  plugins: [svgr()],
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, './src'),
+      '@assets': path.resolve(__dirname, './src/assets'),
+    },
+  },
+  test: {
+    environment: 'jsdom',
+    dir: './src',
+    css: false,
+    maxWorkers: 1,
+    isolate: false,
+    setupFiles: ['./src/test/setup.ts'], // VERIFY: includes setupFilesAfterEnv — runs BEFORE tests in Vitest (unlike Jest); move framework-dependent calls accordingly
+    reporters: ['default', ['junit', { outputFile: 'reports/junit/junit.xml' }]],
+    coverage: {
+      thresholds: { lines: 85, branches: 75 }, // VERIFY: V8 AST remapping in Vitest 4 may shift previously-passing thresholds — re-baseline
+    },
+  },
+});
+
+// Next steps after migration:
+// 1. npm uninstall jest @types/jest ts-jest babel-jest
+// 2. npm install -D vitest
+// 3. npm install -D @vitest/coverage-v8
+// 4. npm install -D jsdom
+// 5. npm install -D vite-plugin-svgr
+// 6. Update package.json scripts: "test": "vitest""
+`;
+
+exports[`real-world fixture suite > vite-jest-hybrid.jest.config.ts > snapshots the detection flags 1`] = `
+{
+  "embeddedParent": null,
+  "monorepo": false,
+  "needsCoverage": true,
+  "needsHappyDom": false,
+  "needsJsdom": true,
+  "needsSvgr": true,
+  "needsTsconfigPaths": false,
+  "setupFiles": [
+    "./src/test/setup.ts",
+  ],
+  "targetVitest": 4,
+  "usesGlobalsTrue": false,
+}
+`;
+
+exports[`real-world fixture suite > vite-jest-hybrid.jest.config.ts > snapshots the warning report (tier:code → message) 1`] = `
+[
+  "info:transform.preset — preset 'ts-jest' removed. Vitest handles TypeScript natively.",
+  "info:env.environment — environment 'jsdom' requires installing the 'jsdom' package.",
+  "verify:setup.order — setupFilesAfterEnv runs after the test framework in Jest; in Vitest setupFiles runs before tests. Move framework-dependent calls (e.g. expect.extend) into a setup that imports vitest first.",
+  "verify:resolve.alias — Relative alias '@' was rewritten with path.resolve(__dirname, ...) so Vite resolves it from the config file location.",
+  "verify:resolve.alias — Relative alias '@assets' was rewritten with path.resolve(__dirname, ...) so Vite resolves it from the config file location.",
+  "verify:resolve.cssStub — CSS stub for \\.(css|scss)$ detected. Set test.css: false in Vitest, or use a Vite plugin if you need CSS modules typed.",
+  "info:resolve.svgr — SVG-to-component transformer ('jest-svg-transformer') detected for \\.svg$. Replaced with the vite-plugin-svgr plugin; import SVGs as React components via './foo.svg?react'. The install step is added to the next-steps block.",
+  "info:transform.dropped — Dropped 1 ts-jest/babel-jest/@swc/jest transform entry. Vite handles them natively.",
+  "info:field.removed — extensionsToTreatAsEsm is unnecessary or removed in Vitest 4.",
+  "info:reporters.mapped — jest-junit was mapped to Vitest's built-in junit reporter (outputFile: reports/junit/junit.xml). Uninstall jest-junit.",
+  "info:coverage.thresholds — coverageThreshold.global was unwrapped into Vitest coverage.thresholds.",
+  "verify:coverage.thresholds — coverageThreshold is present. Vitest 4's V8 AST remapping may shift previously-passing thresholds. Re-baseline after migration.",
+  "verify:workers.maxWorkers — maxWorkers: 1 detected. Added isolate: false to avoid the 2x slowdown observed in Vitest 4.",
+  "info:behavior.hooks — Hook execution order: Vitest defaults to parallel hook execution within a file. If your tests rely on Jest's strict sequential beforeAll/beforeEach order, set sequence.hooks: 'list' on the test config.",
+  "info:setup.done — Vitest does not support the 'done' callback in tests or hooks. Convert any 'done' usage to async/await or return a promise.",
+  "info:behavior.currentTestName — If any code reads expect.getState().currentTestName, note Jest joins describe/test names with a space while Vitest uses ' > '. Adjust string-matching logic accordingly.",
+  "info:behavior.jestNamespace — Vitest has no global 'jest' namespace. Replace 'jest.fn()', 'jest.spyOn()', 'jest.mock()', and 'jest.Mock' types with the equivalent 'vi' import from 'vitest', and update tsconfig types accordingly.",
+  "info:snapshot.regen — Snapshot regeneration is required on first run (format change from Jest).",
+]
+`;
+
+exports[`real-world fixture suite > vue-craco.craco.config.js > snapshots the converted vitest.config.ts output 1`] = `
+"import { defineConfig } from 'vitest/config';
+import path from 'node:path';
+
+export default defineConfig({
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, './src'),
+    },
+  },
+  test: {
+    environment: 'jsdom',
+    css: false,
+    setupFiles: ['./src/setupTests.js'], // VERIFY: includes setupFilesAfterEnv — runs BEFORE tests in Vitest (unlike Jest); move framework-dependent calls accordingly
+    snapshotSerializers: ['jest-serializer-vue'],
+    server: { deps: { inline: ['vuetify'] } },
+  },
+});
+
+// Next steps after migration:
+// 1. npm uninstall jest @types/jest ts-jest babel-jest
+// 2. npm install -D vitest
+// 3. npm install -D jsdom
+// 4. Update package.json scripts: "test": "vitest""
+`;
+
+exports[`real-world fixture suite > vue-craco.craco.config.js > snapshots the detection flags 1`] = `
+{
+  "embeddedParent": "craco.config",
+  "monorepo": false,
+  "needsCoverage": false,
+  "needsHappyDom": false,
+  "needsJsdom": true,
+  "needsSvgr": false,
+  "needsTsconfigPaths": false,
+  "setupFiles": [
+    "./src/setupTests.js",
+  ],
+  "targetVitest": 4,
+  "usesGlobalsTrue": false,
+}
+`;
+
+exports[`real-world fixture suite > vue-craco.craco.config.js > snapshots the warning report (tier:code → message) 1`] = `
+[
+  "verify:config.embedded — Detected an embedded 'jest' block inside a craco.config-style file. Only the 'jest' object was migrated. CRACO's webpack/babel sections need separate Vite-equivalent migration.",
+  "info:env.environment — environment 'jsdom' requires installing the 'jsdom' package.",
+  "verify:setup.order — setupFilesAfterEnv runs after the test framework in Jest; in Vitest setupFiles runs before tests. Move framework-dependent calls (e.g. expect.extend) into a setup that imports vitest first.",
+  "verify:resolve.alias — Relative alias '@' was rewritten with path.resolve(__dirname, ...) so Vite resolves it from the config file location.",
+  "verify:resolve.cssStub — CSS stub for \\.(css|less|scss)$ detected. Set test.css: false in Vitest, or use a Vite plugin if you need CSS modules typed.",
+  "verify:resolve.assetStub — Asset stub for \\.(jpg|jpeg|png|gif|svg)$ -> './test/__mocks__/fileMock.js' detected. Vite serves assets as URLs by default; remove the stub, or add a Vite plugin (e.g. vite-plugin-svgr for SVG-as-component) if you relied on a transformer.",
+  "verify:transform.framework — transform entry '^.+\\.vue$' uses @vue/vue3-jest. Vite compiles .vue files via @vitejs/plugin-vue — add it to the plugins array (npm i -D @vitejs/plugin-vue) and drop the transform.",
+  "info:behavior.hooks — Hook execution order: Vitest defaults to parallel hook execution within a file. If your tests rely on Jest's strict sequential beforeAll/beforeEach order, set sequence.hooks: 'list' on the test config.",
+  "info:setup.done — Vitest does not support the 'done' callback in tests or hooks. Convert any 'done' usage to async/await or return a promise.",
+  "info:behavior.currentTestName — If any code reads expect.getState().currentTestName, note Jest joins describe/test names with a space while Vitest uses ' > '. Adjust string-matching logic accordingly.",
+  "verify:snapshot.serializers — Framework-specific snapshot serializer detected (e.g. enzyme-to-json, jest-serializer-vue). Verify the snapshot output is byte-identical under Vitest. Some serializers depend on Jest internals and may need a Vitest-compatible replacement.",
+  "info:snapshot.regen — Snapshot regeneration is required on first run (format change from Jest).",
+]
+`;

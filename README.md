@@ -53,12 +53,14 @@ Options:
 | `--delete-old` | With `--apply`, also remove the original `jest.config.*` file |
 | `--force` | With `--apply`, bypass dirty-tree and not-a-git-repo checks |
 | `--json` | Emit `{ output, warnings, flags }` (or the `--apply` payload) as JSON to stdout |
+| `--pm <pm>` | Package manager for next-steps commands: `npm`/`pnpm`/`yarn`/`bun` (default: detected from the lockfile) |
+| `--target-vitest <n>` | Target Vitest major: `4` (default) or `3` (`test.workspace` key, `poolOptions` passthrough, `@^3` installs) |
 | `--no-format` | Disable output pretty-printing |
 | `-s, --strict` | Exit non-zero if any `manual` warnings are emitted |
 | `-q, --quiet` | Suppress warnings on stderr |
 | `-h, --help` | Show usage |
 
-`--apply` writes `vitest.config.ts`, removes `jest`/`@types/jest`/`ts-jest`/`babel-jest`/`@swc/jest` from `devDependencies`, adds `vitest` and any required peers (`@vitest/coverage-v8`, `jsdom`, `happy-dom`, `vite-tsconfig-paths`, `vite-plugin-svgr`) at sensible major ranges, and rewrites `jest` invocations in `scripts`. Run `npm install` afterwards.
+`--apply` writes `vitest.config.ts`, removes `jest`/`@types/jest`/`ts-jest`/`babel-jest`/`@swc/jest` from `devDependencies`, adds `vitest` and any required peers (`@vitest/coverage-v8`, `jsdom`, `happy-dom`, `vite-tsconfig-paths`, `vite-plugin-svgr`) at sensible major ranges, rewrites `jest` invocations in `scripts`, and rewrites the `'@testing-library/jest-dom'` import to `'@testing-library/jest-dom/vitest'` in detected setup files. Run your package manager's install afterwards.
 
 ## Programmatic
 
@@ -66,15 +68,19 @@ Options:
 import { convertJestToVitest } from '@shiftkit/jest-to-vitest';
 
 const { output, warnings, flags } = convertJestToVitest(source, {
-  mode: 'standalone', // or 'merge'
-  format: true,        // pretty-print output (default true)
+  mode: 'standalone',    // or 'merge'
+  format: true,           // pretty-print output (default true)
+  packageManager: 'npm',  // commands used in the next-steps block (default npm)
+  targetVitest: 4,        // or 3 for teams pinned to Vitest 3
 });
 
 console.log(output);          // the generated vitest.config.ts
-console.log(warnings);        // [{ type: 'manual' | 'verify' | 'info', message: string }, ...]
+console.log(warnings);        // [{ type: 'manual' | 'verify' | 'info', code: WarningCode, message: string }, ...]
 console.log(flags.needsJsdom); // detection signals for the calling tool
-console.log(flags.needsSvgr);  // (etc.)
+console.log(flags.setupFiles); // detected setup-file paths (etc.)
 ```
+
+Every warning carries a stable `code` (e.g. `discovery.testRegex`, `mocks.hoisting`), aligned with the `@shiftkit/webpack-to-vite` warning model, so CI can gate on specific warnings and reports are machine-filterable.
 
 ## GitHub Action
 

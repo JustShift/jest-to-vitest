@@ -2,7 +2,14 @@
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { execSync } from 'node:child_process';
-import { convertJestToVitest, type ConversionResult, type ConversionFlags } from './converter.js';
+import {
+  convertJestToVitest,
+  PM_COMMANDS,
+  type ConversionResult,
+  type ConversionFlags,
+  type PackageManager,
+  type TargetVitest,
+} from './converter.js';
 
 const args = process.argv.slice(2);
 
@@ -24,6 +31,10 @@ Options:
       --apply           Write vitest.config.ts to disk, update package.json
       --delete-old      With --apply, also remove the original jest.config.* file
       --force           With --apply, bypass dirty-tree and not-a-git-repo checks
+      --pm <pm>         Package manager for next-steps commands: npm|pnpm|yarn|bun
+                        (default: detected from the lockfile in the current directory)
+      --target-vitest <n>  Target Vitest major: 4 (default) or 3
+                        (3: test.workspace key, poolOptions passthrough, @^3 installs)
       --no-format       Disable output pretty-printing
   -h, --help            Show this help
 
@@ -32,8 +43,9 @@ config to stdout; warnings go to stderr.
 
 With --apply: detects jest.config.{ts,mts,cts,js,mjs,cjs,json} (or
 package.json#jest) in the current directory, writes vitest.config.ts next to
-it, updates devDependencies and scripts in package.json. Refuses to run if the
-working tree is dirty unless --force is passed.
+it, updates devDependencies and scripts in package.json, and rewrites the
+'@testing-library/jest-dom' import to '/vitest' in detected setup files.
+Refuses to run if the working tree is dirty unless --force is passed.
 `);
 };
 
@@ -46,6 +58,8 @@ interface ParsedArgs {
   deleteOld: boolean;
   force: boolean;
   format: boolean;
+  pm: PackageManager | null;
+  targetVitest: TargetVitest;
   file: string | null;
 }
 
@@ -58,6 +72,8 @@ const parseArgs = (): ParsedArgs => {
   let deleteOld = false;
   let force = false;
   let format = true;
+  let pm: PackageManager | null = null;
+  let targetVitest: TargetVitest = 4;
   let file: string | null = null;
 
   for (let i = 0; i < args.length; i++) {
@@ -79,6 +95,20 @@ const parseArgs = (): ParsedArgs => {
       force = true;
     } else if (a === '--no-format') {
       format = false;
+    } else if (a === '--pm') {
+      const next = args[++i];
+      if (next !== 'npm' && next !== 'pnpm' && next !== 'yarn' && next !== 'bun') {
+        process.stderr.write(`Invalid --pm '${next}'. Use npm, pnpm, yarn, or bun.\n`);
+        process.exit(2);
+      }
+      pm = next;
+    } else if (a === '--target-vitest') {
+      const next = args[++i];
+      if (next !== '3' && next !== '4') {
+        process.stderr.write(`Invalid --target-vitest '${next}'. Use 3 or 4.\n`);
+        process.exit(2);
+      }
+      targetVitest = next === '3' ? 3 : 4;
     } else if (a === '-m' || a === '--mode') {
       const next = args[++i];
       if (next !== 'standalone' && next !== 'merge') {
@@ -94,7 +124,15 @@ const parseArgs = (): ParsedArgs => {
     }
   }
 
-  return { mode, strict, quiet, json, apply, deleteOld, force, format, file };
+  return { mode, strict, quiet, json, apply, deleteOld, force, format, pm, targetVitest, file };
+};
+
+// Lockfile-based package-manager detection (CLI only; the web/API path stays npm).
+const detectPackageManager = (cwd: string): PackageManager => {
+  if (existsSync(join(cwd, 'pnpm-lock.yaml'))) return 'pnpm';
+  if (existsSync(join(cwd, 'yarn.lock'))) return 'yarn';
+  if (existsSync(join(cwd, 'bun.lockb')) || existsSync(join(cwd, 'bun.lock'))) return 'bun';
+  return 'npm';
 };
 
 const readStdin = (): Promise<string> =>
@@ -195,8 +233,9 @@ const updatePackageJson = (pkgPath: string, flags: ConversionFlags): { removed: 
   };
   // Default version ranges for newly-added devDependencies. Reviewed 2026-05;
   // bump these when the Vitest ecosystem ships new majors (see RELEASING.md).
-  addDep('vitest', '^4.0.0');
-  if (flags.needsCoverage) addDep('@vitest/coverage-v8', '^4.0.0');
+  const vitestRange = flags.targetVitest === 3 ? '^3.0.0' : '^4.0.0';
+  addDep('vitest', vitestRange);
+  if (flags.needsCoverage) addDep('@vitest/coverage-v8', vitestRange);
   if (flags.needsJsdom) addDep('jsdom', '^29.0.0');
   if (flags.needsHappyDom) addDep('happy-dom', '^20.0.0');
   if (flags.needsTsconfigPaths) addDep('vite-tsconfig-paths', '^6.0.0');
@@ -213,6 +252,33 @@ const updatePackageJson = (pkgPath: string, flags: ConversionFlags): { removed: 
   const trailingNewline = raw.endsWith('\n') ? '\n' : '';
   writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + trailingNewline);
   return { removed, added };
+};
+
+// Rewrite the single most-hit migration blocker in detected setup files:
+// '@testing-library/jest-dom' (and its '/extend-expect' entry) must become
+// '@testing-library/jest-dom/vitest' under Vitest. Runs behind the same
+// dirty-tree guard as the rest of --apply.
+const rewriteSetupFileImports = (cwd: string, setupFiles: string[]): string[] => {
+  const rewritten: string[] = [];
+  for (const rel of setupFiles) {
+    if (!rel.startsWith('.')) continue; // only file paths, not package specifiers
+    const abs = join(cwd, rel);
+    if (!existsSync(abs)) continue;
+    let src: string;
+    try {
+      src = readFileSync(abs, 'utf8');
+    } catch {
+      continue;
+    }
+    const next = src
+      .replace(/(['"])@testing-library\/jest-dom\/extend-expect\1/g, '$1@testing-library/jest-dom/vitest$1')
+      .replace(/(['"])@testing-library\/jest-dom\1/g, '$1@testing-library/jest-dom/vitest$1');
+    if (next !== src) {
+      writeFileSync(abs, next);
+      rewritten.push(rel);
+    }
+  }
+  return rewritten;
 };
 
 const writeVitestConfig = (cwd: string, output: string, force: boolean): string => {
@@ -249,13 +315,19 @@ const runApply = async (parsed: ParsedArgs): Promise<void> => {
     process.exit(1);
   }
 
+  const pm = parsed.pm ?? detectPackageManager(cwd);
   const input = readFileSync(found.path, 'utf8');
-  const result = convertJestToVitest(input, { mode: parsed.mode, format: parsed.format });
+  const result = convertJestToVitest(input, {
+    mode: parsed.mode,
+    format: parsed.format,
+    packageManager: pm,
+    targetVitest: parsed.targetVitest,
+  });
 
   if (parsed.strict && result.warnings.some((w) => w.type === 'manual')) {
     process.stderr.write(`--apply --strict: ${result.warnings.filter((w) => w.type === 'manual').length} manual warning(s); aborting before write.\n`);
     for (const w of result.warnings.filter((w) => w.type === 'manual')) {
-      process.stderr.write(`  [manual] ${w.message}\n`);
+      process.stderr.write(`  [manual] (${w.code}) ${w.message}\n`);
     }
     process.exit(1);
   }
@@ -266,6 +338,8 @@ const runApply = async (parsed: ParsedArgs): Promise<void> => {
   if (existsSync(pkgPath)) {
     pkgUpdate = updatePackageJson(pkgPath, result.flags);
   }
+
+  const setupRewritten = rewriteSetupFileImports(cwd, result.flags.setupFiles);
 
   let removed: string | null = null;
   if (parsed.deleteOld && !found.isPackageJson) {
@@ -282,6 +356,7 @@ const runApply = async (parsed: ParsedArgs): Promise<void> => {
           packageJsonUpdated: pkgUpdate ? pkgPath : null,
           packageJsonRemoved: pkgUpdate?.removed ?? [],
           packageJsonAdded: pkgUpdate?.added ?? [],
+          setupFilesRewritten: setupRewritten,
           deletedSource: removed,
           warnings: result.warnings,
           flags: result.flags,
@@ -298,8 +373,11 @@ const runApply = async (parsed: ParsedArgs): Promise<void> => {
     if (pkgUpdate.removed.length > 0) process.stdout.write(`✓ Removed from package.json: ${pkgUpdate.removed.join(', ')}\n`);
     if (pkgUpdate.added.length > 0) process.stdout.write(`✓ Added to package.json devDependencies: ${pkgUpdate.added.join(', ')}\n`);
   }
+  if (setupRewritten.length > 0) {
+    process.stdout.write(`✓ Rewrote @testing-library/jest-dom import to /vitest in: ${setupRewritten.join(', ')}\n`);
+  }
   if (removed) process.stdout.write(`✓ Deleted ${removed}\n`);
-  process.stdout.write(`\nNext: run \`npm install\` (or your package manager equivalent) to install the new devDependencies, then \`npm test\`.\n`);
+  process.stdout.write(`\nNext: run \`${PM_COMMANDS[pm].install}\` to install the new devDependencies, then run your tests.\n`);
 
   const manualCount = result.warnings.filter((w) => w.type === 'manual').length;
   const verifyCount = result.warnings.filter((w) => w.type === 'verify').length;
@@ -324,6 +402,8 @@ const runStdout = async (parsed: ParsedArgs): Promise<void> => {
   const result: ConversionResult = convertJestToVitest(input, {
     mode: parsed.mode,
     format: parsed.format,
+    packageManager: parsed.pm ?? detectPackageManager(process.cwd()),
+    targetVitest: parsed.targetVitest,
   });
 
   if (parsed.json) {
@@ -339,7 +419,7 @@ const runStdout = async (parsed: ParsedArgs): Promise<void> => {
     if (!parsed.quiet && result.warnings.length > 0) {
       process.stderr.write(`\n${result.warnings.length} warning(s):\n`);
       for (const w of result.warnings) {
-        process.stderr.write(`  [${w.type}] ${w.message}\n`);
+        process.stderr.write(`  [${w.type}] (${w.code}) ${w.message}\n`);
       }
     }
   }

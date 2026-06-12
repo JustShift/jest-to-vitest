@@ -10,5 +10,6 @@
     "types": ["node"]
   },
   "include": ["src/**/*", "tests/**/*"],
-  "exclude": ["node_modules", "dist"]
+  // tests/fixtures holds verbatim real-world jest configs (inputs, not code).
+  "exclude": ["node_modules", "dist", "tests/fixtures"]
 }

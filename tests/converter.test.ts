@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { convertJestToVitest } from '../src/converter';
+import { convertJestToVitest, normalizeRootDir } from '../src/converter';
 
 const messages = (warnings: { message: string }[]) => warnings.map((w) => w.message);
 
@@ -724,9 +724,15 @@ describe('convertJestToVitest — inline warning comments', () => {
     expect(r.output).toMatch(/setupFiles: \[[^\]]*\],\s*\/\/ VERIFY: includes setupFilesAfterEnv/);
   });
 
-  it('attaches an inline VERIFY note to reporters', () => {
-    const r = convertJestToVitest("module.exports = { reporters: ['default'] };");
+  it('attaches an inline VERIFY note to reporters copied verbatim', () => {
+    const r = convertJestToVitest("module.exports = { reporters: ['jest-silent-reporter'] };");
     expect(r.output).toMatch(/reporters: \[[^\]]*\],\s*\/\/ VERIFY: Jest and Vitest built-in reporter names differ/);
+  });
+
+  it('does not attach a VERIFY note when all reporters are Vitest built-ins', () => {
+    const r = convertJestToVitest("module.exports = { reporters: ['default'] };");
+    expect(r.output).toContain("reporters: ['default'],");
+    expect(r.output).not.toMatch(/reporters: \[[^\]]*\],\s*\/\/ VERIFY/);
   });
 
   it('attaches an inline VERIFY note to deps when moduleDirectories is mapped', () => {
@@ -847,5 +853,380 @@ describe('convertJestToVitest — flags', () => {
   it('reports needsSvgr=false by default', () => {
     const r = convertJestToVitest("module.exports = { testEnvironment: 'jsdom' };");
     expect(r.flags.needsSvgr).toBe(false);
+  });
+});
+
+describe('convertJestToVitest — testRegex regex-to-glob conversion', () => {
+  it('converts a simple suffix matcher', () => {
+    const r = convertJestToVitest("module.exports = { testRegex: '\\\\.test\\\\.tsx?$' };");
+    expect(r.output).toContain("'**/*.test.{ts,tsx}'");
+    expect(r.output).not.toContain('default Vitest glob');
+    expect(messages(r.warnings).some((m) => m.includes('was converted to glob pattern(s)'))).toBe(true);
+  });
+
+  it('converts a __tests__ directory matcher', () => {
+    const r = convertJestToVitest("module.exports = { testRegex: '/__tests__/.*\\\\.[jt]sx?$' };");
+    expect(r.output).toContain("'**/__tests__/**/*.{js,jsx,ts,tsx}'");
+  });
+
+  it('converts the classic Jest/CRA default pattern into two globs', () => {
+    const r = convertJestToVitest(
+      "module.exports = { testRegex: '(/__tests__/.*|(\\\\.|/)(test|spec))\\\\.[jt]sx?$' };"
+    );
+    expect(r.output).toContain("'**/__tests__/**/*.{js,jsx,ts,tsx}'");
+    expect(r.output).toContain("'**/*.test.{js,jsx,ts,tsx}'");
+    expect(r.output).toContain("'**/*.spec.{js,jsx,ts,tsx}'");
+  });
+
+  it('converts an array of testRegex patterns', () => {
+    const r = convertJestToVitest(
+      "module.exports = { testRegex: ['\\\\.test\\\\.ts$', '\\\\.spec\\\\.ts$'] };"
+    );
+    expect(r.output).toContain("'**/*.test.ts'");
+    expect(r.output).toContain("'**/*.spec.ts'");
+  });
+
+  it('falls back to the default glob for untranslatable patterns', () => {
+    const r = convertJestToVitest("module.exports = { testRegex: '(?<!skip)\\\\.test\\\\.ts$' };");
+    expect(r.output).toContain('**/*.{test,spec}.{ts,tsx,js,jsx}');
+    expect(messages(r.warnings).some((m) => m.includes('could not be converted'))).toBe(true);
+  });
+
+  it('converts testRegex inside project entries', () => {
+    const r = convertJestToVitest(
+      "module.exports = { projects: [{ displayName: 'unit', testRegex: '\\\\.test\\\\.ts$' }] };"
+    );
+    expect(r.output).toContain("'**/*.test.ts'");
+  });
+});
+
+describe('convertJestToVitest — path-aware <rootDir> normalizer', () => {
+  it('normalizes a bare <rootDir> to the root directory itself', () => {
+    const r = convertJestToVitest("module.exports = { roots: ['<rootDir>'] };");
+    expect(r.output).toContain("dir: '.'");
+    expect(r.output).not.toContain("'./'");
+  });
+
+  it('collapses <rootDir> in the middle of a string', () => {
+    expect(normalizeRootDir('foo/<rootDir>/bar')).toBe('foo/bar');
+    expect(normalizeRootDir('foo<rootDir>/bar')).toBe('foo/bar');
+    expect(normalizeRootDir('^<rootDir>/src')).toBe('^src');
+  });
+
+  it('keeps leading path substitution and untouched package names', () => {
+    expect(normalizeRootDir('<rootDir>/src/setup.ts')).toBe('./src/setup.ts');
+    expect(normalizeRootDir('<rootDir>/src/**/*.test.ts')).toBe('./src/**/*.test.ts');
+    expect(normalizeRootDir('lodash-es')).toBe('lodash-es');
+  });
+});
+
+describe('convertJestToVitest — watchPathIgnorePatterns mapping', () => {
+  it('emits server.watch.ignored for static string patterns', () => {
+    const r = convertJestToVitest(
+      "module.exports = { watchPathIgnorePatterns: ['<rootDir>/dist/', 'coverage/'] };"
+    );
+    expect(r.output).toMatch(/server: \{\s*\n\s*watch: \{ ignored: \['\*\*\/dist\/\*\*', '\*\*\/coverage\/\*\*'\] \}/);
+    expect(r.warnings.some((w) => w.code === 'watch.ignored' && w.type === 'info')).toBe(true);
+    expect(r.warnings.some((w) => w.code === 'watch.ignored' && w.type === 'manual')).toBe(false);
+  });
+
+  it('falls back to a manual warning for regex patterns', () => {
+    const r = convertJestToVitest(
+      "module.exports = { watchPathIgnorePatterns: ['node_modules/(?!shared)'] };"
+    );
+    expect(r.output).not.toContain('server: {');
+    expect(r.warnings.some((w) => w.code === 'watch.ignored' && w.type === 'manual')).toBe(true);
+  });
+});
+
+describe('convertJestToVitest — transform classification', () => {
+  it('drops @swc/jest like ts-jest with an info warning', () => {
+    const r = convertJestToVitest(
+      "module.exports = { transform: { '^.+\\\\.tsx?$': ['@swc/jest', { jsc: {} }] } };"
+    );
+    expect(r.warnings.some((w) => w.type === 'manual' && w.message.includes('@swc/jest'))).toBe(false);
+    expect(messages(r.warnings).some((m) => m.includes('Dropped 1 ts-jest/babel-jest/@swc/jest'))).toBe(true);
+  });
+
+  it('suggests @vitejs/plugin-vue for vue transforms', () => {
+    const r = convertJestToVitest(
+      "module.exports = { transform: { '^.+\\\\.vue$': '@vue/vue3-jest' } };"
+    );
+    const w = r.warnings.find((w) => w.code === 'transform.framework');
+    expect(w?.type).toBe('verify');
+    expect(w?.message).toContain('@vitejs/plugin-vue');
+  });
+
+  it('suggests @sveltejs/vite-plugin-svelte for svelte-jester', () => {
+    const r = convertJestToVitest(
+      "module.exports = { transform: { '^.+\\\\.svelte$': 'svelte-jester' } };"
+    );
+    const w = r.warnings.find((w) => w.code === 'transform.framework');
+    expect(w?.message).toContain('@sveltejs/vite-plugin-svelte');
+  });
+});
+
+describe('convertJestToVitest — deprecated Jest field aliases', () => {
+  it('treats setupTestFrameworkScriptFile as setupFilesAfterEnv', () => {
+    const r = convertJestToVitest(
+      "module.exports = { setupTestFrameworkScriptFile: '<rootDir>/setup.js' };"
+    );
+    expect(r.output).toContain("setupFiles: ['./setup.js']");
+    expect(r.warnings.some((w) => w.code === 'discovery.deprecatedAlias' && w.message.includes('setupFilesAfterEnv'))).toBe(true);
+    // Inherits the setupFilesAfterEnv ordering warning too.
+    expect(r.warnings.some((w) => w.code === 'setup.order')).toBe(true);
+  });
+
+  it('treats testPathDirs as roots', () => {
+    const r = convertJestToVitest("module.exports = { testPathDirs: ['<rootDir>/src'] };");
+    expect(r.output).toContain("dir: './src'");
+    expect(r.warnings.some((w) => w.code === 'discovery.deprecatedAlias' && w.message.includes('roots'))).toBe(true);
+  });
+});
+
+describe('convertJestToVitest — third-party reporter mapping', () => {
+  it("maps ['jest-junit', { outputDirectory }] to Vitest's built-in junit reporter", () => {
+    const r = convertJestToVitest(
+      "module.exports = { reporters: ['default', ['jest-junit', { outputDirectory: 'reports', outputName: 'results.xml' }]] };"
+    );
+    expect(r.output).toContain("['junit', { outputFile: 'reports/results.xml' }]");
+    expect(r.output).not.toContain('jest-junit');
+    expect(r.warnings.some((w) => w.code === 'reporters.mapped')).toBe(true);
+  });
+
+  it('maps bare jest-junit with the default output file', () => {
+    const r = convertJestToVitest("module.exports = { reporters: ['jest-junit'] };");
+    expect(r.output).toContain("['junit', { outputFile: 'junit.xml' }]");
+  });
+
+  it("maps github-actions to Vitest's built-in reporter", () => {
+    const r = convertJestToVitest("module.exports = { reporters: [['github-actions', { silent: false }]] };");
+    expect(r.output).toContain("'github-actions'");
+    expect(r.output).not.toContain('silent: false');
+  });
+
+  it('keeps the verify warning for reporters with no built-in equivalent', () => {
+    const r = convertJestToVitest("module.exports = { reporters: ['jest-html-reporter'] };");
+    expect(r.output).toContain('jest-html-reporter');
+    expect(r.warnings.some((w) => w.code === 'reporters.verbatim')).toBe(true);
+  });
+});
+
+describe('convertJestToVitest — workerThreads and memory limit', () => {
+  it("maps workerThreads: true to pool: 'threads'", () => {
+    const r = convertJestToVitest('module.exports = { workerThreads: true };');
+    expect(r.output).toContain("pool: 'threads'");
+    expect(r.warnings.some((w) => w.code === 'workers.pool' && w.type === 'info')).toBe(true);
+  });
+
+  it('omits workerThreads: false', () => {
+    const r = convertJestToVitest('module.exports = { workerThreads: false };');
+    expect(r.output).not.toContain('pool:');
+  });
+
+  it('adds a verify warning to the workerIdleMemoryLimit → vmMemoryLimit mapping', () => {
+    const r = convertJestToVitest("module.exports = { workerIdleMemoryLimit: '512MB' };");
+    expect(r.output).toMatch(/vmMemoryLimit: '512MB',\s*\/\/ VERIFY:/);
+    expect(r.warnings.some((w) => w.code === 'workers.memoryLimit' && w.type === 'verify')).toBe(true);
+  });
+});
+
+describe('convertJestToVitest — environment normalization', () => {
+  it("normalizes @happy-dom/jest-environment to 'happy-dom'", () => {
+    const r = convertJestToVitest(
+      "module.exports = { testEnvironment: '@happy-dom/jest-environment' };"
+    );
+    expect(r.output).toContain("environment: 'happy-dom'");
+    expect(r.flags.needsHappyDom).toBe(true);
+    // Must not fall into the custom-environment verify branch.
+    expect(messages(r.warnings).some((m) => m.includes('Custom testEnvironment'))).toBe(false);
+  });
+});
+
+describe('convertJestToVitest — regex aliases for non-trivial moduleNameMapper keys', () => {
+  it('emits the array alias form with a regex find for mid-string capture groups', () => {
+    const r = convertJestToVitest(
+      "module.exports = { moduleNameMapper: { '^@app/(.*)/impl$': '<rootDir>/src/$1/impl', '^@/(.*)$': '<rootDir>/src/$1' } };"
+    );
+    expect(r.output).toContain('alias: [');
+    expect(r.output).toContain("{ find: /^@app\\/(.*)\\/impl$/, replacement: './src/$1/impl' }");
+    // The trivial key still appears, now in array form.
+    expect(r.output).toContain("{ find: '@', replacement: path.resolve(__dirname, './src') }");
+    expect(r.warnings.some((w) => w.code === 'resolve.aliasRegex' && w.type === 'verify')).toBe(true);
+  });
+
+  it('keeps the object alias form when all keys are trivial', () => {
+    const r = convertJestToVitest(
+      "module.exports = { moduleNameMapper: { '^lodash$': 'lodash-es' } };"
+    );
+    expect(r.output).toContain('alias: {');
+    expect(r.output).not.toContain('find:');
+  });
+});
+
+describe('convertJestToVitest — stable warning codes', () => {
+  it('attaches a code to every warning', () => {
+    const r = convertJestToVitest(`module.exports = {
+      preset: 'ts-jest',
+      testEnvironment: 'jsdom',
+      setupFilesAfterEnv: ['<rootDir>/setup.ts'],
+      coverageThreshold: { global: { lines: 80 } },
+      somethingUnknown: 1,
+    };`);
+    for (const w of r.warnings) {
+      expect(w.code, `warning without code: ${w.message}`).toBeTruthy();
+      expect(w.code).toMatch(/^[a-z]+\.[a-zA-Z]+$/);
+    }
+  });
+
+  it('uses config.unmapped for unknown fields', () => {
+    const r = convertJestToVitest('module.exports = { somethingUnknown: 1 };');
+    expect(r.warnings.some((w) => w.code === 'config.unmapped' && w.type === 'manual')).toBe(true);
+  });
+});
+
+describe('convertJestToVitest — multi-statement static evaluation', () => {
+  it('folds module-level config.x = y assignments', () => {
+    const r = convertJestToVitest(`
+      const config = { testEnvironment: 'jsdom' };
+      config.testTimeout = 10000;
+      config.maxWorkers = 2;
+      module.exports = config;
+    `);
+    expect(r.output).toContain("environment: 'jsdom'");
+    expect(r.output).toContain('testTimeout: 10000');
+    expect(r.output).toContain('maxWorkers: 2');
+    expect(r.warnings.some((w) => w.code === 'config.multiStatement')).toBe(true);
+  });
+
+  it('folds multi-statement function bodies', () => {
+    const r = convertJestToVitest(`
+      module.exports = () => {
+        const config = { testEnvironment: 'node' };
+        config.testTimeout = 5000;
+        return config;
+      };
+    `);
+    expect(r.output).toContain("environment: 'node'");
+    expect(r.output).toContain('testTimeout: 5000');
+  });
+
+  it('keeps simple process.env ternaries as expression values', () => {
+    const r = convertJestToVitest(`
+      const config = { testTimeout: 1000 };
+      config.testEnvironment = process.env.CI ? 'node' : 'jsdom';
+      module.exports = config;
+    `);
+    expect(r.output).toContain("environment: process.env.CI ? 'node' : 'jsdom'");
+  });
+
+  it('flags conditionally-guarded assignments', () => {
+    const r = convertJestToVitest(`
+      module.exports = () => {
+        const config = { testEnvironment: 'node' };
+        if (process.env.CI) config.maxWorkers = 2;
+        return config;
+      };
+    `);
+    expect(r.output).toContain('maxWorkers: 2');
+    const w = r.warnings.find((w) => w.code === 'config.multiStatement');
+    expect(w?.message).toContain('folded unconditionally');
+  });
+
+  it('lets a later assignment win over the literal property', () => {
+    const r = convertJestToVitest(`
+      const config = { testTimeout: 1000 };
+      config.testTimeout = 2000;
+      module.exports = config;
+    `);
+    expect(r.output).toContain('testTimeout: 2000');
+    expect(r.output).not.toContain('testTimeout: 1000');
+    // No self-inflicted conflict warning.
+    expect(r.warnings.some((w) => w.code === 'config.conflict')).toBe(false);
+  });
+});
+
+describe('convertJestToVitest — package-manager-aware next steps', () => {
+  it('defaults to npm commands', () => {
+    const r = convertJestToVitest("module.exports = { testEnvironment: 'node' };");
+    expect(r.output).toContain('npm uninstall jest');
+    expect(r.output).toContain('npm install -D vitest');
+  });
+
+  it('emits pnpm commands when packageManager is pnpm', () => {
+    const r = convertJestToVitest("module.exports = { testEnvironment: 'jsdom' };", {
+      packageManager: 'pnpm',
+    });
+    expect(r.output).toContain('pnpm remove jest @types/jest ts-jest babel-jest');
+    expect(r.output).toContain('pnpm add -D vitest');
+    expect(r.output).toContain('pnpm add -D jsdom');
+    expect(r.output).not.toContain('npm install');
+  });
+
+  it('emits yarn and bun commands', () => {
+    const yarn = convertJestToVitest('module.exports = {};', { packageManager: 'yarn' });
+    expect(yarn.output).toContain('yarn add -D vitest');
+    const bun = convertJestToVitest('module.exports = {};', { packageManager: 'bun' });
+    expect(bun.output).toContain('bun add -d vitest');
+  });
+});
+
+describe('convertJestToVitest — --target-vitest 3', () => {
+  it('emits the workspace key instead of projects', () => {
+    const r = convertJestToVitest(
+      "module.exports = { projects: ['<rootDir>/packages/*'] };",
+      { targetVitest: 3 }
+    );
+    expect(r.output).toContain('workspace: [');
+    expect(r.output).not.toContain('projects: [');
+    expect(messages(r.warnings).some((m) => m.includes('test.workspace'))).toBe(true);
+  });
+
+  it('passes poolOptions through verbatim for Vitest 3', () => {
+    const r = convertJestToVitest(
+      'module.exports = { poolOptions: { threads: { singleThread: true } } };',
+      { targetVitest: 3 }
+    );
+    expect(r.output).toContain('poolOptions:');
+    expect(r.output).not.toContain('maxWorkers: 1');
+  });
+
+  it('pins install commands to @^3 and reports the flag', () => {
+    const r = convertJestToVitest(
+      "module.exports = { collectCoverage: true };",
+      { targetVitest: 3 }
+    );
+    expect(r.output).toContain('npm install -D vitest@^3');
+    expect(r.output).toContain('npm install -D @vitest/coverage-v8@^3');
+    expect(r.flags.targetVitest).toBe(3);
+  });
+
+  it('defaults to Vitest 4 behavior', () => {
+    const r = convertJestToVitest("module.exports = { projects: ['<rootDir>/packages/*'] };");
+    expect(r.output).toContain('projects: [');
+    expect(r.flags.targetVitest).toBe(4);
+  });
+});
+
+describe('convertJestToVitest — flags.setupFiles', () => {
+  it('collects normalized setup-file paths', () => {
+    const r = convertJestToVitest(
+      "module.exports = { setupFiles: ['<rootDir>/jest.polyfills.js'], setupFilesAfterEnv: ['<rootDir>/src/setupTests.ts', '@testing-library/jest-dom'] };"
+    );
+    expect(r.flags.setupFiles).toContain('./jest.polyfills.js');
+    expect(r.flags.setupFiles).toContain('./src/setupTests.ts');
+    expect(r.flags.setupFiles).toContain('@testing-library/jest-dom');
+  });
+
+  it('collects setup files from project entries', () => {
+    const r = convertJestToVitest(
+      "module.exports = { projects: [{ displayName: 'a', setupFilesAfterEnv: ['<rootDir>/a/setup.ts'] }] };"
+    );
+    expect(r.flags.setupFiles).toContain('./a/setup.ts');
+  });
+
+  it('is empty when no setup files exist', () => {
+    const r = convertJestToVitest('module.exports = {};');
+    expect(r.flags.setupFiles).toEqual([]);
   });
 });

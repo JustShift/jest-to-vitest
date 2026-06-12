@@ -17,16 +17,127 @@ const generate: any =
     ? _generator
     : (_generator as unknown as { default: unknown }).default;
 
+export type WarningType = 'manual' | 'verify' | 'info';
+
+/**
+ * Stable warning codes (aligned with the @shiftkit/webpack-to-vite warning
+ * model). Codes let CI gate on specific warnings and let docs link per-warning.
+ * Adding codes is non-breaking; renaming or removing one is a breaking change.
+ */
+export type WarningCode =
+  // config / input shape
+  | 'config.parseError'
+  | 'config.notFound'
+  | 'config.functionForm'
+  | 'config.multiStatement'
+  | 'config.embedded'
+  | 'config.nextJest'
+  | 'config.dynamic'
+  | 'config.conflict'
+  | 'config.unmapped'
+  // test discovery
+  | 'discovery.testRegex'
+  | 'discovery.exclude'
+  | 'discovery.roots'
+  | 'discovery.deprecatedAlias'
+  // environment
+  | 'env.environment'
+  | 'env.options'
+  | 'env.url'
+  // setup / teardown
+  | 'setup.files'
+  | 'setup.order'
+  | 'setup.done'
+  | 'setup.globalSetup'
+  | 'setup.globalTeardown'
+  // coverage
+  | 'coverage.provider'
+  | 'coverage.thresholds'
+  | 'coverage.include'
+  | 'coverage.removed'
+  // module resolution
+  | 'resolve.alias'
+  | 'resolve.aliasRegex'
+  | 'resolve.cssStub'
+  | 'resolve.assetStub'
+  | 'resolve.fontStub'
+  | 'resolve.svgr'
+  | 'resolve.extensions'
+  | 'resolve.moduleDirectories'
+  | 'resolve.modulePaths'
+  | 'resolve.tsconfigPaths'
+  // transforms / presets
+  | 'transform.preset'
+  | 'transform.dropped'
+  | 'transform.fileStub'
+  | 'transform.framework'
+  | 'transform.custom'
+  | 'transform.ignorePatterns'
+  // mocking
+  | 'mocks.automock'
+  | 'mocks.reset'
+  | 'mocks.hoisting'
+  | 'mocks.modules'
+  // timers
+  | 'timers.fake'
+  | 'timers.legacy'
+  // parallelism / performance
+  | 'workers.maxWorkers'
+  | 'workers.pool'
+  | 'workers.memoryLimit'
+  | 'workers.detect'
+  // reporters
+  | 'reporters.mapped'
+  | 'reporters.verbatim'
+  | 'reporters.dynamic'
+  | 'reporters.processor'
+  // snapshots
+  | 'snapshot.serializers'
+  | 'snapshot.format'
+  | 'snapshot.resolver'
+  | 'snapshot.regen'
+  // sequencing
+  | 'sequence.shuffle'
+  | 'sequence.sequencer'
+  | 'sequence.seed'
+  // projects / monorepo
+  | 'projects.remapped'
+  | 'projects.field'
+  | 'projects.dynamic'
+  | 'projects.inline'
+  // globals
+  | 'globals.define'
+  | 'globals.true'
+  // watch
+  | 'watch.ignored'
+  | 'watch.plugins'
+  // behavioral migration notes
+  | 'behavior.hooks'
+  | 'behavior.currentTestName'
+  | 'behavior.jestNamespace'
+  // catch-alls for removed / no-equivalent fields
+  | 'field.removed'
+  | 'field.noEquivalent';
+
 export interface Warning {
-  type: 'manual' | 'verify' | 'info';
+  type: WarningType;
+  code: WarningCode;
   message: string;
 }
 
 export type OutputMode = 'standalone' | 'merge';
 
+export type PackageManager = 'npm' | 'pnpm' | 'yarn' | 'bun';
+
+export type TargetVitest = 3 | 4;
+
 export interface ConvertOptions {
   mode?: OutputMode;
   format?: boolean;
+  /** Package manager used in next-steps commands. Defaults to npm (the web/API path). */
+  packageManager?: PackageManager;
+  /** Target Vitest major. 4 (default): inline projects, no poolOptions. 3: workspace key, poolOptions passthrough. */
+  targetVitest?: TargetVitest;
 }
 
 export interface ConversionFlags {
@@ -38,7 +149,21 @@ export interface ConversionFlags {
   needsTsconfigPaths: boolean;
   needsSvgr: boolean;
   usesGlobalsTrue: boolean;
+  /** Detected setup-file paths (string literals from setupFiles/setupFilesAfterEnv, <rootDir> normalized). */
+  setupFiles: string[];
+  targetVitest: TargetVitest;
 }
+
+// Package-manager command templates for the next-steps block and CLI hints.
+export const PM_COMMANDS: Record<
+  PackageManager,
+  { add: (pkgs: string) => string; remove: (pkgs: string) => string; install: string }
+> = {
+  npm: { add: (p) => `npm install -D ${p}`, remove: (p) => `npm uninstall ${p}`, install: 'npm install' },
+  pnpm: { add: (p) => `pnpm add -D ${p}`, remove: (p) => `pnpm remove ${p}`, install: 'pnpm install' },
+  yarn: { add: (p) => `yarn add -D ${p}`, remove: (p) => `yarn remove ${p}`, install: 'yarn install' },
+  bun: { add: (p) => `bun add -d ${p}`, remove: (p) => `bun remove ${p}`, install: 'bun install' },
+};
 
 export interface ConversionResult {
   output: string;
@@ -78,18 +203,20 @@ export function convertJestToVitest(
 ): ConversionResult {
   const mode: OutputMode = options.mode ?? 'standalone';
   const format: boolean = options.format ?? true;
+  const pm = PM_COMMANDS[options.packageManager ?? 'npm'];
+  const targetVitest: TargetVitest = options.targetVitest ?? 4;
   const warnings: Warning[] = [];
   const seenWarnings = new Set<string>();
 
-  const pushWarning = (type: Warning['type'], message: string) => {
+  const pushWarning = (type: WarningType, code: WarningCode, message: string) => {
     const key = `${type}::${message}`;
     if (seenWarnings.has(key)) return;
     seenWarnings.add(key);
-    warnings.push({ type, message });
+    warnings.push({ type, code, message });
   };
-  const warnInfo = (msg: string) => pushWarning('info', msg);
-  const warnVerify = (msg: string) => pushWarning('verify', msg);
-  const warnManual = (msg: string) => pushWarning('manual', msg);
+  const warnInfo = (code: WarningCode, msg: string) => pushWarning('info', code, msg);
+  const warnVerify = (code: WarningCode, msg: string) => pushWarning('verify', code, msg);
+  const warnManual = (code: WarningCode, msg: string) => pushWarning('manual', code, msg);
 
   // 1. package.json with a "jest" key.
   if (input.trim().startsWith('{')) {
@@ -117,9 +244,9 @@ export function convertJestToVitest(
     return {
       output: `// Failed to parse input as JavaScript/TypeScript\n// Error: ${message}\n\n${input}`,
       warnings: [
-        { type: 'manual', message: 'Failed to parse input. Ensure it is valid JavaScript or TypeScript.' },
+        { type: 'manual', code: 'config.parseError', message: 'Failed to parse input. Ensure it is valid JavaScript or TypeScript.' },
       ],
-      flags: emptyFlags(),
+      flags: emptyFlags(targetVitest),
     };
   }
 
@@ -154,6 +281,102 @@ export function convertJestToVitest(
     return jestProp;
   };
 
+  // ---- Multi-statement static evaluation (never executes user code) ----
+  let foldedAssignments = 0;
+  let foldedConditional = false;
+
+  const foldKey = (k: string) =>
+    /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(k) ? t.identifier(k) : t.stringLiteral(k);
+
+  // Fold `name.prop = value` member assignments into a copy of the object
+  // literal. Later assignments win; same-named literal properties are removed
+  // so the assembly step does not report a self-inflicted conflict.
+  const applyFoldedProps = (
+    obj: t.ObjectExpression,
+    extras: Map<string, t.Expression>
+  ): t.ObjectExpression => {
+    if (extras.size === 0) return obj;
+    foldedAssignments += extras.size;
+    const kept = obj.properties.filter((p) => {
+      if (!t.isObjectProperty(p) || p.computed) return true;
+      const name =
+        t.isIdentifier(p.key) ? p.key.name :
+        t.isStringLiteral(p.key) ? p.key.value : null;
+      return name == null || !extras.has(name);
+    });
+    const appended = [...extras.entries()].map(([k, v]) => t.objectProperty(foldKey(k), v));
+    return t.objectExpression([...kept, ...appended]);
+  };
+
+  // Static evaluator for multi-statement function bodies:
+  //   const config = {...}; config.x = y; if (cond) config.z = w; return config;
+  // Assignments are read in order; if-guarded ones are folded unconditionally
+  // and flagged so the verify warning calls them out.
+  const resolveLocalConfig = (block: t.BlockStatement, name: string): t.ObjectExpression | null => {
+    let base: t.ObjectExpression | null = null;
+    const extras = new Map<string, t.Expression>();
+    const collectAssignment = (expr: t.Node, conditional: boolean): void => {
+      if (!t.isAssignmentExpression(expr) || expr.operator !== '=') return;
+      const left = expr.left;
+      if (!t.isMemberExpression(left) || left.computed) return;
+      if (!t.isIdentifier(left.object, { name })) return;
+      if (!t.isIdentifier(left.property)) return;
+      extras.set(left.property.name, expr.right as t.Expression);
+      if (conditional) foldedConditional = true;
+    };
+    for (const stmt of block.body) {
+      if (t.isVariableDeclaration(stmt)) {
+        for (const decl of stmt.declarations) {
+          if (t.isIdentifier(decl.id, { name }) && decl.init) {
+            const init =
+              t.isTSAsExpression(decl.init) || t.isTSSatisfiesExpression(decl.init)
+                ? decl.init.expression
+                : decl.init;
+            if (t.isObjectExpression(init)) base = init;
+          }
+        }
+      } else if (t.isExpressionStatement(stmt)) {
+        collectAssignment(stmt.expression, false);
+      } else if (t.isIfStatement(stmt)) {
+        const branches = [stmt.consequent, stmt.alternate].filter((b): b is t.Statement => b != null);
+        for (const branch of branches) {
+          const stmts = t.isBlockStatement(branch) ? branch.body : [branch];
+          for (const s of stmts) {
+            if (t.isExpressionStatement(s)) collectAssignment(s.expression, true);
+          }
+        }
+      }
+    }
+    if (!base) return null;
+    return applyFoldedProps(base, extras);
+  };
+
+  // Module-level variant: fold `config.x = y` statements found through the
+  // binding's reference paths (covers `const config = {...}; config.x = y;
+  // module.exports = config`).
+  const foldBindingAssignments = (
+    obj: t.ObjectExpression,
+    binding: { referencePaths?: NodePath[] }
+  ): t.ObjectExpression => {
+    const extras = new Map<string, t.Expression>();
+    for (const ref of binding.referencePaths ?? []) {
+      const memberPath = ref.parentPath;
+      if (!memberPath) continue;
+      const member = memberPath.node;
+      if (!t.isMemberExpression(member) || member.object !== ref.node || member.computed) continue;
+      const assignPath = memberPath.parentPath;
+      if (!assignPath) continue;
+      const assign = assignPath.node;
+      if (!t.isAssignmentExpression(assign) || assign.left !== member || assign.operator !== '=') continue;
+      if (!t.isIdentifier(member.property)) continue;
+      extras.set(member.property.name, assign.right as t.Expression);
+      if (assignPath.findParent((p) => p.isIfStatement() || p.isConditionalExpression() || p.isLogicalExpression())) {
+        foldedConditional = true;
+      }
+    }
+    return applyFoldedProps(obj, extras);
+  };
+
   // Unwrap function-form configs: () => ({...}), async () => ({...}), function() { return {...} }.
   const extractFromFunctionBody = (node: t.Node, scope?: Scope): t.ObjectExpression | null => {
     if (!t.isArrowFunctionExpression(node) && !t.isFunctionExpression(node)) return null;
@@ -164,7 +387,13 @@ export function convertJestToVitest(
       // Find a single ReturnStatement.
       const returns = body.body.filter((s) => t.isReturnStatement(s)) as t.ReturnStatement[];
       if (returns.length === 1 && returns[0].argument) {
-        const direct = extractObjectArg(returns[0].argument, scope);
+        const arg = returns[0].argument;
+        // Multi-statement body returning a locally-built object.
+        if (t.isIdentifier(arg)) {
+          const local = resolveLocalConfig(body, arg.name);
+          if (local) return local;
+        }
+        const direct = extractObjectArg(arg, scope);
         if (direct) return direct;
       }
     }
@@ -238,7 +467,9 @@ export function convertJestToVitest(
       resolvedIdentifiers.add(node.name);
       const binding = scope.getBinding(node.name);
       if (binding && t.isVariableDeclarator(binding.path.node)) {
-        return extractObjectArg(binding.path.node.init, scope);
+        const resolvedObj = extractObjectArg(binding.path.node.init, scope);
+        if (resolvedObj) return foldBindingAssignments(resolvedObj, binding);
+        return null;
       }
       return null;
     }
@@ -278,9 +509,9 @@ export function convertJestToVitest(
         `// Expected module.exports = {...}, export default {...}, a config identifier,\n` +
         `// a function returning a static object literal, or a parent config object with a 'jest' property.\n\n${input}`,
       warnings: [
-        { type: 'manual', message: 'Could not detect Jest configuration object in the provided code.' },
+        { type: 'manual', code: 'config.notFound', message: 'Could not detect Jest configuration object in the provided code.' },
       ],
-      flags: emptyFlags(),
+      flags: emptyFlags(targetVitest),
     };
   }
 
@@ -288,23 +519,38 @@ export function convertJestToVitest(
   if (usedFunctionForm) {
     pushWarning(
       'verify',
+      'config.functionForm',
       `Detected a function-form config (e.g. module.exports = () => ({...})). The returned static object literal was extracted; any logic in the function body was dropped. Inline the values or call mergeConfig() if dynamic logic is needed.`
+    );
+  }
+  if (foldedAssignments > 0) {
+    pushWarning(
+      'verify',
+      'config.multiStatement',
+      `${foldedAssignments} property assignment(s) (config.x = ...) were statically folded into the config object.${
+        foldedConditional
+          ? ' At least one was guarded by a condition and was folded unconditionally — verify the intended branch.'
+          : ''
+      }`
     );
   }
   if (embeddedParent === 'vue.config') {
     pushWarning(
       'verify',
+      'config.embedded',
       `Detected an embedded 'jest' block inside a vue.config-style file. Only the 'jest' object was migrated. Move the rest of vue.config.js to its own file (it does not belong in vitest.config.ts).`
     );
   } else if (embeddedParent === 'craco.config') {
     pushWarning(
       'verify',
+      'config.embedded',
       `Detected an embedded 'jest' block inside a craco.config-style file. Only the 'jest' object was migrated. CRACO's webpack/babel sections need separate Vite-equivalent migration.`
     );
   }
   if (usedNextJest) {
     pushWarning(
       'verify',
+      'config.nextJest',
       `Detected a next/jest wrapper config. The inner Jest config object was converted, but the Next.js SWC preset also handled TS/JSX transforms, CSS module stubbing, and tsconfig path aliases implicitly. @vitejs/plugin-react and vite-tsconfig-paths were added to cover the common cases; CSS and next/image-style imports may still need mocks in a setup file.`
     );
   }
@@ -314,12 +560,15 @@ export function convertJestToVitest(
   const coverage = newSection();
   const sequenceEntries = new Map<string, string>();
   const resolveAlias = new Map<string, string>(); // key (alias from) -> value (target)
+  const resolveAliasRegex: Array<{ find: string; replacement: string }> = []; // regex-form aliases
   const resolveExtensions: string[] = [];
   const serverDepsInline: string[] = [];
+  const rootServerWatchIgnored: string[] = []; // Vite server.watch.ignored (root level)
   const define = new Map<string, string>();
   const rootPlugins: string[] = [];
   const rootImports: string[] = [];
   const tailoredNextSteps: string[] = [];
+  const detectedSetupFiles: string[] = [];
 
   // Detection flags for tailored next steps.
   let needsTsconfigPaths = false;
@@ -350,9 +599,24 @@ export function convertJestToVitest(
     'jest-emotion',
   ];
 
-  const stripRootDir = (code: string) => code.replace(/<rootDir>\/?/g, './');
+  const stripRootDir = (code: string) => normalizeRootDirInCode(code);
   const getSourceCode = (node: t.Node) => stripRootDir(generate(node).code);
   const getCompactSourceCode = (node: t.Node) => stripRootDir(generate(node, { compact: true }).code);
+
+  // Collect setup-file string literals (for flags.setupFiles, used by --apply
+  // to rewrite the @testing-library/jest-dom import).
+  const collectSetupPaths = (value: t.Node) => {
+    const push = (p: string) => {
+      const normalized = normalizeRootDir(p);
+      if (!detectedSetupFiles.includes(normalized)) detectedSetupFiles.push(normalized);
+    };
+    if (t.isStringLiteral(value)) push(value.value);
+    else if (t.isArrayExpression(value)) {
+      value.elements.forEach((el) => {
+        if (el && t.isStringLiteral(el)) push(el.value);
+      });
+    }
+  };
 
   const getPropName = (node: t.ObjectProperty): string | null => {
     if (t.isIdentifier(node.key)) return node.key.name;
@@ -364,6 +628,7 @@ export function convertJestToVitest(
   const setScalar = (section: ConfigSection, key: string, value: string) => {
     if (section.scalars.has(key)) {
       warnVerify(
+        'config.conflict',
         `Multiple Jest fields map to '${key}'. Kept the latest value; review the input for conflicting settings.`
       );
     }
@@ -373,10 +638,41 @@ export function convertJestToVitest(
   const setSequence = (key: string, value: string) => {
     if (sequenceEntries.has(key)) {
       warnVerify(
+        'config.conflict',
         `Multiple Jest fields map to sequence.${key}. Kept the latest value; review the input for conflicting settings.`
       );
     }
     sequenceEntries.set(key, value);
+  };
+
+  // Shared by 'roots' and its deprecated alias 'testPathDirs'.
+  const applyRoots = (value: t.Node, source: string) => {
+    if (t.isArrayExpression(value)) {
+      if (value.elements.length > 1) {
+        warnInfo(
+          'discovery.roots',
+          `roots had ${value.elements.length} entries; Vitest test.dir takes a single directory. Kept the first. Use test.include for multi-root patterns.`
+        );
+      }
+      if (value.elements[0]) setScalar(test, 'dir', getSourceCode(value.elements[0]));
+    } else {
+      setScalar(test, 'dir', source);
+    }
+  };
+
+  // Shared by 'setupFilesAfterEnv' and its deprecated alias 'setupTestFrameworkScriptFile'.
+  const applySetupFilesAfterEnv = (source: string, value: t.Node) => {
+    collectSetupPaths(value);
+    appendArray(test, 'setupFiles', source);
+    hasSetupFilesAfterEnv = true;
+    test.noteFor.set(
+      'setupFiles',
+      `VERIFY: includes setupFilesAfterEnv — runs BEFORE tests in Vitest (unlike Jest); move framework-dependent calls accordingly`
+    );
+    warnVerify(
+      'setup.order',
+      `setupFilesAfterEnv runs after the test framework in Jest; in Vitest setupFiles runs before tests. Move framework-dependent calls (e.g. expect.extend) into a setup that imports vitest first.`
+    );
   };
 
   // Append items into an array-valued section field. Accepts an array literal source ("[a, b]")
@@ -396,6 +692,7 @@ export function convertJestToVitest(
       const exprSrc = getSourceCode(prop.argument);
       test.raw.push(`// MANUAL: spread '...${exprSrc}' could not be statically resolved. Inline its values or use mergeConfig().`);
       warnManual(
+        'config.dynamic',
         `Spread '...${exprSrc}' was preserved as a // MANUAL comment. Vitest cannot reproduce dynamic spreads. Inline the values or call mergeConfig() from 'vitest/config'.`
       );
       return;
@@ -405,6 +702,7 @@ export function convertJestToVitest(
       const name = t.isIdentifier(prop.key) ? prop.key.name : 'method';
       test.raw.push(`// MANUAL: object method '${name}' could not be converted to a static Vitest value.`);
       warnManual(
+        'config.dynamic',
         `Object method '${name}' is not a static value. Replace it with a serializable expression or move to a setup file.`
       );
       return;
@@ -419,6 +717,7 @@ export function convertJestToVitest(
       const valSrc = getSourceCode(prop.value as t.Node);
       test.raw.push(`// MANUAL: computed key [${keySrc}]: ${valSrc}`);
       warnManual(
+        'config.dynamic',
         `Computed key '[${keySrc}]' is not statically analyzable. Resolve it to a literal property name.`
       );
       return;
@@ -434,27 +733,20 @@ export function convertJestToVitest(
         appendArray(test, 'include', source);
         break;
       case 'testRegex':
-        if (!test.arrays.has('include')) {
-          appendArray(test, 'include', `['**/*.{test,spec}.{ts,tsx,js,jsx}']`);
-        }
-        test.noteFor.set('include', `VERIFY: testRegex ${source} was converted to default Vitest glob — verify file matching`);
-        test.raw.push(`// NOTE: testRegex was ${source}. Verify file matching against the default Vitest glob.`);
-        warnVerify(`testRegex was converted to the default Vitest glob. Verify file matching.`);
+        handleTestRegex(value, test, '');
         break;
       case 'testPathIgnorePatterns':
         handleRegexIgnorePatterns(value, test, 'exclude', 'testPathIgnorePatterns');
         break;
+      case 'testPathDirs':
+        warnInfo(
+          'discovery.deprecatedAlias',
+          `testPathDirs is a deprecated Jest field name (renamed to roots in Jest 18). Treated as roots.`
+        );
+        applyRoots(value, source);
+        break;
       case 'roots':
-        if (t.isArrayExpression(value)) {
-          if (value.elements.length > 1) {
-            warnInfo(
-              `roots had ${value.elements.length} entries; Vitest test.dir takes a single directory. Kept the first. Use test.include for multi-root patterns.`
-            );
-          }
-          if (value.elements[0]) setScalar(test, 'dir', getSourceCode(value.elements[0]));
-        } else {
-          setScalar(test, 'dir', source);
-        }
+        applyRoots(value, source);
         break;
       case 'testEnvironment':
         applyTestEnvironment(test, value, source);
@@ -468,6 +760,7 @@ export function convertJestToVitest(
         setScalar(test, 'environmentOptions', `{ jsdom: { url: ${urlSrc} } }`);
         test.noteFor.set('environmentOptions', `VERIFY: from testURL — merge manually if you also use testEnvironmentOptions`);
         warnVerify(
+          'env.url',
           `testURL was migrated to environmentOptions.jsdom.url. If you also have testEnvironmentOptions, merge them manually.`
         );
         break;
@@ -486,6 +779,7 @@ export function convertJestToVitest(
               `VERIFY: '${p}' likely uses module.exports — Vitest expects ESM default export`
             );
             warnVerify(
+              'setup.globalSetup',
               `globalSetup '${p}' uses a CommonJS extension (.js/.cjs). Vitest expects an ESM default export, or named 'setup'/'teardown' exports. Convert 'module.exports = fn' to 'export default fn' (or rename to .mjs/.ts).`
             );
             return true;
@@ -503,16 +797,16 @@ export function convertJestToVitest(
       case 'slowTestThreshold':
         if (t.isNumericLiteral(value)) {
           setScalar(test, 'slowTestThreshold', String(value.value * 1000));
-          warnInfo(`slowTestThreshold was converted from Jest seconds to Vitest milliseconds.`);
+          warnInfo('config.unmapped', `slowTestThreshold was converted from Jest seconds to Vitest milliseconds.`);
         } else {
           test.raw.push(`// MANUAL: slowTestThreshold: ${source},`);
-          warnManual(`slowTestThreshold is not a static number. Convert Jest seconds to Vitest milliseconds manually.`);
+          warnManual('config.dynamic', `slowTestThreshold is not a static number. Convert Jest seconds to Vitest milliseconds manually.`);
         }
         break;
       case 'bail':
         if (t.isBooleanLiteral(value)) {
           setScalar(test, 'bail', value.value ? '1' : '0');
-          warnInfo(`bail ${source} was normalized to Vitest's numeric bail setting.`);
+          warnInfo('config.unmapped', `bail ${source} was normalized to Vitest's numeric bail setting.`);
         } else {
           setScalar(test, 'bail', source);
         }
@@ -520,6 +814,7 @@ export function convertJestToVitest(
       case 'globalTeardown':
         test.raw.push(`// MANUAL: globalTeardown: ${source},`);
         warnManual(
+          'setup.globalTeardown',
           `globalTeardown has no separate Vitest config key. Export teardown from a globalSetup file or return a teardown function from the setup module.`
         );
         break;
@@ -550,27 +845,28 @@ export function convertJestToVitest(
             .map(({ key }) => key);
           if (unsupported.length > 0) {
             warnVerify(
+              'snapshot.format',
               `snapshotFormat.${unsupported.join(', ')} is not supported by Vitest snapshotFormat. Use snapshotSerializers or set compareKeys: null where applicable.`
             );
           }
         }
         break;
       case 'prettierPath':
-        warnInfo(`prettierPath has no Vitest equivalent. Vitest uses an internal serializer; remove if no longer needed.`);
+        warnInfo('snapshot.format', `prettierPath has no Vitest equivalent. Vitest uses an internal serializer; remove if no longer needed.`);
+        break;
+      case 'setupTestFrameworkScriptFile':
+        warnInfo(
+          'discovery.deprecatedAlias',
+          `setupTestFrameworkScriptFile is a deprecated Jest field name (renamed to setupFilesAfterEnv in Jest 24). Treated as setupFilesAfterEnv.`
+        );
+        applySetupFilesAfterEnv(t.isArrayExpression(value) ? source : `[${source}]`, value);
         break;
       case 'setupFiles':
-      case 'setupFilesAfterEnv':
+        collectSetupPaths(value);
         appendArray(test, 'setupFiles', source);
-        if (key === 'setupFilesAfterEnv') {
-          hasSetupFilesAfterEnv = true;
-          test.noteFor.set(
-            'setupFiles',
-            `VERIFY: includes setupFilesAfterEnv — runs BEFORE tests in Vitest (unlike Jest); move framework-dependent calls accordingly`
-          );
-          warnVerify(
-            `setupFilesAfterEnv runs after the test framework in Jest; in Vitest setupFiles runs before tests. Move framework-dependent calls (e.g. expect.extend) into a setup that imports vitest first.`
-          );
-        }
+        break;
+      case 'setupFilesAfterEnv':
+        applySetupFilesAfterEnv(source, value);
         break;
       case 'collectCoverage':
         if (t.isBooleanLiteral(value)) {
@@ -597,6 +893,7 @@ export function convertJestToVitest(
         handleCoverageThreshold(value, source);
         needsCoverage = true;
         warnVerify(
+          'coverage.thresholds',
           `coverageThreshold is present. Vitest 4's V8 AST remapping may shift previously-passing thresholds. Re-baseline after migration.`
         );
         break;
@@ -613,22 +910,23 @@ export function convertJestToVitest(
           if (value.value === 'babel') {
             setScalar(coverage, 'provider', `'istanbul'`);
             selectedCoverageProvider = 'istanbul';
-            warnInfo(`coverageProvider: 'babel' was mapped to Vitest's 'istanbul' coverage provider.`);
+            warnInfo('coverage.provider', `coverageProvider: 'babel' was mapped to Vitest's 'istanbul' coverage provider.`);
           } else if (value.value === 'v8' || value.value === 'istanbul' || value.value === 'custom') {
             setScalar(coverage, 'provider', source);
             selectedCoverageProvider = value.value;
             if (value.value === 'custom') {
-              warnManual(`coverageProvider: 'custom' requires a Vitest custom coverage provider module.`);
+              warnManual('coverage.provider', `coverageProvider: 'custom' requires a Vitest custom coverage provider module.`);
             }
           } else {
             coverage.raw.push(`// MANUAL: coverage provider ${source} is not valid in Vitest.`);
             warnManual(
+              'coverage.provider',
               `coverageProvider ${source} is not valid in Vitest. Use 'v8', 'istanbul', or 'custom'.`
             );
           }
         } else {
           coverage.raw.push(`// MANUAL: coverage provider ${source} could not be statically converted.`);
-          warnManual(`coverageProvider value ${source} could not be statically converted.`);
+          warnManual('coverage.provider', `coverageProvider value ${source} could not be statically converted.`);
         }
         needsCoverage = true;
         break;
@@ -642,6 +940,7 @@ export function convertJestToVitest(
           needsTsconfigPaths = true;
         } else {
           warnManual(
+            'resolve.alias',
             `moduleNameMapper is a non-object expression. Inline its values or replace with resolve.alias entries.`
           );
         }
@@ -652,33 +951,36 @@ export function convertJestToVitest(
             if (t.isStringLiteral(el)) resolveExtensions.push(el.value);
           });
         } else {
-          warnVerify(`moduleFileExtensions value was not a static array. Copy to resolve.extensions manually.`);
+          warnVerify('resolve.extensions', `moduleFileExtensions value was not a static array. Copy to resolve.extensions manually.`);
         }
         break;
       case 'moduleDirectories':
         setScalar(test, 'deps', `{ moduleDirectories: ${source} }`);
         test.noteFor.set('deps', `VERIFY: source aliasing belongs in resolve.alias; this controls mock/dependency resolution only`);
         warnVerify(
+          'resolve.moduleDirectories',
           `moduleDirectories was migrated to test.deps.moduleDirectories. Verify if you intended source resolution (use resolve.alias) versus mock/dependency resolution (test.deps.moduleDirectories).`
         );
         break;
       case 'modulePaths':
         warnManual(
+          'resolve.modulePaths',
           `modulePaths has no direct Vitest equivalent. For source aliasing add entries to resolve.alias; for dependency resolution use test.deps.moduleDirectories.`
         );
         break;
       case 'preset':
         if (t.isStringLiteral(value) && (value.value === 'ts-jest' || value.value.includes('ts-jest'))) {
-          warnInfo(`preset '${value.value}' removed. Vitest handles TypeScript natively.`);
+          warnInfo('transform.preset', `preset '${value.value}' removed. Vitest handles TypeScript natively.`);
         } else if (t.isStringLiteral(value) && value.value.includes('babel-jest')) {
-          warnInfo(`preset '${value.value}' removed. Vite handles transformation.`);
+          warnInfo('transform.preset', `preset '${value.value}' removed. Vite handles transformation.`);
         } else if (t.isStringLiteral(value) && value.value.startsWith('.')) {
           hasMonorepoSignal = true;
           warnManual(
+            'transform.preset',
             `Relative preset '${value.value}' detected. In Vitest, share config via mergeConfig() from 'vitest/config' rather than presets.`
           );
         } else {
-          warnManual(`preset ${source} has no direct Vitest equivalent.`);
+          warnManual('transform.preset', `preset ${source} has no direct Vitest equivalent.`);
         }
         break;
       case 'transform':
@@ -694,12 +996,13 @@ export function convertJestToVitest(
             });
             if (pkgs.length === 0) {
               warnVerify(
+                'transform.ignorePatterns',
                 `transformIgnorePatterns entry ${JSON.stringify(el.value)} could not be parsed into package names. Add packages manually to test.server.deps.inline.`
               );
             }
           });
         } else {
-          warnVerify(`transformIgnorePatterns was not a static array. Translate to test.server.deps.inline manually.`);
+          warnVerify('transform.ignorePatterns', `transformIgnorePatterns was not a static array. Translate to test.server.deps.inline manually.`);
         }
         break;
       case 'automock':
@@ -707,24 +1010,26 @@ export function convertJestToVitest(
           if (value.value) {
             hasMockingSignal = true;
             warnManual(
+              'mocks.automock',
               `automock: true has no direct Vitest flag. Vitest auto-mocks only files inside __mocks__ adjacent to the source. Call vi.mock() per module instead.`
             );
             warnVerify(
+              'mocks.automock',
               `Unlike Jest, Vitest does not auto-load root __mocks__ files unless vi.mock() is called. Put always-on mocks in setupFiles or add explicit vi.mock() calls.`
             );
           } else {
-            warnInfo(`automock: false omitted. Vitest does not automock modules by default.`);
+            warnInfo('mocks.automock', `automock: false omitted. Vitest does not automock modules by default.`);
           }
         } else {
           hasMockingSignal = true;
-          warnManual(`automock value ${source} could not be statically interpreted. Convert to per-module vi.mock() calls.`);
+          warnManual('mocks.automock', `automock value ${source} could not be statically interpreted. Convert to per-module vi.mock() calls.`);
         }
         break;
       case 'resetMocks':
         hasMockingSignal = true;
         setScalar(test, 'mockReset', source);
         test.noteFor.set('mockReset', `VERIFY: mapped from Jest resetMocks — verify mock implementation reset semantics`);
-        warnVerify(`resetMocks was mapped to Vitest mockReset. Verify mock implementation reset behavior on first run.`);
+        warnVerify('mocks.reset', `resetMocks was mapped to Vitest mockReset. Verify mock implementation reset behavior on first run.`);
         break;
       case 'fakeTimers':
         if (t.isObjectExpression(value)) {
@@ -733,7 +1038,7 @@ export function convertJestToVitest(
           const keep: t.ObjectProperty[] = [];
           value.properties.forEach((p) => {
             if (!t.isObjectProperty(p)) {
-              warnManual(`fakeTimers contains a non-static property that could not be converted.`);
+              warnManual('timers.fake', `fakeTimers contains a non-static property that could not be converted.`);
               return;
             }
             const subKey = getPropName(p);
@@ -750,38 +1055,42 @@ export function convertJestToVitest(
               return;
             }
             warnVerify(
+              'timers.fake',
               `fakeTimers.${subKey ?? 'unknown'} is not a Vitest fakeTimers config option. Move equivalent behavior to vi.useFakeTimers() or a setup file.`
             );
           });
           if (legacy) {
-            warnManual(`fakeTimers.legacyFakeTimers has no equivalent in Vitest. Migrate timer usage to the modern fake timers API.`);
+            warnManual('timers.legacy', `fakeTimers.legacyFakeTimers has no equivalent in Vitest. Migrate timer usage to the modern fake timers API.`);
           }
           if (enableGlobally === true) {
             warnManual(
+              'timers.fake',
               `fakeTimers.enableGlobally: true cannot be represented as Vitest config. Add a setupFiles entry that imports vi from 'vitest' and calls vi.useFakeTimers() if global fake timers are still required.`
             );
           }
           if (enableGlobally === false) {
-            warnInfo(`fakeTimers.enableGlobally: false omitted. Vitest only installs fake timers when vi.useFakeTimers() is called.`);
+            warnInfo('timers.fake', `fakeTimers.enableGlobally: false omitted. Vitest only installs fake timers when vi.useFakeTimers() is called.`);
           }
           if (keep.length > 0) {
             setScalar(test, 'fakeTimers', `{ ${keep.map((p) => generate(p).code).join(', ')} }`);
           }
         } else {
-          warnManual(`fakeTimers value ${source} is not a static object. Verify the migration manually.`);
+          warnManual('timers.fake', `fakeTimers value ${source} is not a static object. Verify the migration manually.`);
         }
         break;
       case 'timers':
         if (t.isStringLiteral(value) && value.value === 'legacy') {
           warnManual(
+            'timers.legacy',
             `timers: 'legacy' has no Vitest equivalent. Replace with modern fake timers (vi.useFakeTimers()) in tests that need them.`
           );
         } else if (t.isStringLiteral(value) && value.value === 'fake') {
           warnManual(
+            'timers.fake',
             `timers: 'fake' globally installed fake timers in Jest. Vitest has no config flag for this; call vi.useFakeTimers() in setupFiles or individual tests.`
           );
         } else {
-          warnInfo(`timers: ${source} has no direct mapping. Use vi.useFakeTimers() per test instead.`);
+          warnInfo('timers.fake', `timers: ${source} has no direct mapping. Use vi.useFakeTimers() per test instead.`);
         }
         break;
       case 'maxWorkers': {
@@ -789,17 +1098,32 @@ export function convertJestToVitest(
         const isOne = t.isNumericLiteral(value) && value.value === 1;
         if (isOne) {
           setScalar(test, 'isolate', 'false');
-          warnVerify(`maxWorkers: 1 detected. Added isolate: false to avoid the 2x slowdown observed in Vitest 4.`);
+          warnVerify('workers.maxWorkers', `maxWorkers: 1 detected. Added isolate: false to avoid the 2x slowdown observed in Vitest 4.`);
         }
         break;
       }
       case 'runInBand':
         setScalar(test, 'maxWorkers', '1');
         setScalar(test, 'isolate', 'false');
-        warnInfo(`runInBand is a Jest CLI flag. Mapped to maxWorkers: 1, isolate: false.`);
+        warnInfo('workers.maxWorkers', `runInBand is a Jest CLI flag. Mapped to maxWorkers: 1, isolate: false.`);
+        break;
+      case 'workerThreads':
+        if (t.isBooleanLiteral(value) && value.value === true) {
+          setScalar(test, 'pool', `'threads'`);
+          warnInfo('workers.pool', `workerThreads: true (Jest 30) was mapped to Vitest pool: 'threads'.`);
+        } else if (t.isBooleanLiteral(value) && value.value === false) {
+          warnInfo('workers.pool', `workerThreads: false omitted. Vitest's default pool ('forks') already uses child processes.`);
+        } else {
+          warnVerify('workers.pool', `workerThreads value ${source} could not be statically interpreted. Set test.pool ('threads' or 'forks') manually.`);
+        }
         break;
       case 'workerIdleMemoryLimit':
         setScalar(test, 'vmMemoryLimit', source);
+        test.noteFor.set('vmMemoryLimit', `VERIFY: only applies when pool: 'vmThreads' is set (not the default pool)`);
+        warnVerify(
+          'workers.memoryLimit',
+          `workerIdleMemoryLimit was mapped to vmMemoryLimit, which only applies to the non-default 'vmThreads' pool. Set test.pool: 'vmThreads' if you rely on memory-based worker recycling, or drop the setting.`
+        );
         break;
       case 'verbose':
         if (t.isBooleanLiteral(value) && value.value === true) {
@@ -807,51 +1131,54 @@ export function convertJestToVitest(
         } else if (t.isBooleanLiteral(value) && value.value === false) {
           appendArray(test, 'reporters', `['default']`);
         } else {
-          warnInfo(`verbose value ${source} could not be mapped. Set test.reporters explicitly.`);
+          warnInfo('reporters.verbatim', `verbose value ${source} could not be mapped. Set test.reporters explicitly.`);
         }
         break;
       case 'reporters':
-        if (t.isArrayExpression(value)) {
-          appendArray(test, 'reporters', source);
-          test.noteFor.set('reporters', `VERIFY: Jest and Vitest built-in reporter names differ (default/verbose/dot/json/junit/tap/html)`);
-          warnVerify(
-            `reporters were copied verbatim. Jest and Vitest built-in reporter names differ (e.g. 'default', 'verbose', 'dot', 'json', 'junit', 'tap', 'html').`
-          );
-        } else {
-          warnManual(`reporters value ${source} is not a static array. Re-author for Vitest's reporter API.`);
-        }
+        handleReporters(value, source);
         break;
       case 'testSequencer':
         test.raw.push(`// MANUAL: testSequencer: ${source},`);
         warnManual(
+          'sequence.sequencer',
           `testSequencer cannot be copied directly. Vitest's sequence.sequencer expects a Vitest-compatible sequencer constructor from 'vitest/node'. Port the sequencer module manually.`
         );
         break;
       case 'randomize':
         if (t.isBooleanLiteral(value)) {
           setSequence('shuffle', String(value.value));
-          warnInfo(`randomize was mapped to Vitest sequence.shuffle.`);
+          warnInfo('sequence.shuffle', `randomize was mapped to Vitest sequence.shuffle.`);
         } else {
           test.raw.push(`// MANUAL: randomize: ${source},`);
-          warnManual(`randomize value ${source} could not be statically converted to sequence.shuffle.`);
+          warnManual('sequence.shuffle', `randomize value ${source} could not be statically converted to sequence.shuffle.`);
         }
         break;
       case 'showSeed':
         if (t.isBooleanLiteral(value) && value.value) {
-          warnInfo(`showSeed: true has no direct Vitest config equivalent. Use Vitest's seed/sequence options and CLI output when reproducing shuffled runs.`);
+          warnInfo('sequence.seed', `showSeed: true has no direct Vitest config equivalent. Use Vitest's seed/sequence options and CLI output when reproducing shuffled runs.`);
         } else if (t.isBooleanLiteral(value)) {
-          warnInfo(`showSeed: false omitted.`);
+          warnInfo('sequence.seed', `showSeed: false omitted.`);
         } else {
-          warnVerify(`showSeed value ${source} could not be statically interpreted. Review Vitest seed output manually.`);
+          warnVerify('sequence.seed', `showSeed value ${source} could not be statically interpreted. Review Vitest seed output manually.`);
         }
         break;
       case 'detectOpenHandles':
       case 'detectLeaks':
         warnVerify(
+          'workers.detect',
           `${key} has no direct Vitest flag. Run with --logHeapUsage and consider the verbose reporter to surface stuck handles or leaks.`
         );
         break;
       case 'poolOptions':
+        if (targetVitest === 3) {
+          // poolOptions still exists in Vitest 3; copy it through.
+          setScalar(test, 'poolOptions', source);
+          warnVerify(
+            'workers.pool',
+            `poolOptions was copied verbatim (valid in Vitest 3, removed in Vitest 4). Verify each option against the Vitest 3 docs.`
+          );
+          break;
+        }
         if (t.isObjectExpression(value)) {
           let mappedSingle = false;
           value.properties.forEach((p) => {
@@ -870,29 +1197,30 @@ export function convertJestToVitest(
             }
           });
           warnInfo(
+            'workers.pool',
             mappedSingle
               ? `poolOptions was removed in Vitest 4. Mapped singleThread/singleFork to maxWorkers: 1, isolate: false.`
               : `poolOptions was removed in Vitest 4. Move equivalent settings to the top-level test config (maxWorkers, isolate, pool).`
           );
         } else {
-          warnInfo(`poolOptions was removed in Vitest 4. Move equivalent settings to top-level test config.`);
+          warnInfo('workers.pool', `poolOptions was removed in Vitest 4. Move equivalent settings to top-level test config.`);
         }
         break;
       case 'watchPathIgnorePatterns':
-        warnManual(
-          `watchPathIgnorePatterns has no Vitest test-config equivalent. Use Vite's server.watch.ignored in vite.config.ts.`
-        );
+        handleWatchPathIgnorePatterns(value, source);
         break;
       case 'unmockedModulePathPatterns':
         hasMockingSignal = true;
-        warnManual(`${key} has no equivalent in Vitest.`);
+        warnManual('field.noEquivalent', `${key} has no equivalent in Vitest.`);
         break;
       case 'watchPlugins':
+        warnManual('watch.plugins', `${key} has no equivalent in Vitest.`);
+        break;
       case 'testRunner':
       case 'dependencyExtractor':
       case 'haste':
       case 'resolver':
-        warnManual(`${key} has no equivalent in Vitest.`);
+        warnManual('field.noEquivalent', `${key} has no equivalent in Vitest.`);
         break;
       case 'globals':
         if (t.isObjectExpression(value)) {
@@ -901,6 +1229,7 @@ export function convertJestToVitest(
           setScalar(test, 'globals', 'true');
           usesGlobalsTrue = true;
           warnInfo(
+            'globals.true',
             `globals: true is set. Note: this does not auto-cleanup Testing Library DOM. Call cleanup() explicitly or import @testing-library/jest-dom/vitest.`
           );
         } else {
@@ -912,13 +1241,13 @@ export function convertJestToVitest(
           if (value.value) {
             setScalar(test, 'globals', 'true');
             usesGlobalsTrue = true;
-            warnInfo(`injectGlobals: true was mapped to Vitest globals: true.`);
+            warnInfo('globals.true', `injectGlobals: true was mapped to Vitest globals: true.`);
           } else {
-            warnInfo(`injectGlobals: false omitted. Vitest uses explicit imports by default.`);
+            warnInfo('globals.true', `injectGlobals: false omitted. Vitest uses explicit imports by default.`);
           }
         } else {
           test.raw.push(`// MANUAL: injectGlobals: ${source},`);
-          warnManual(`injectGlobals value ${source} could not be statically converted.`);
+          warnManual('globals.true', `injectGlobals value ${source} could not be statically converted.`);
         }
         break;
       case 'extensionsToTreatAsEsm':
@@ -930,59 +1259,72 @@ export function convertJestToVitest(
       case 'minWorkers':
       case 'poolMatchGlobs':
       case 'environmentMatchGlobs':
-        warnInfo(`${key} is unnecessary or removed in Vitest 4.`);
+        warnInfo('field.removed', `${key} is unnecessary or removed in Vitest 4.`);
         break;
       case 'projects':
         if (t.isArrayExpression(value)) {
           pendingProjects = value;
           warnVerify(
+            'projects.remapped',
             `projects entries were remapped to Vitest's { test: { ... } } shape. Neither Jest nor Vitest inherits root options into projects by default; add extends: true to a project if it should inherit the root config.`
           );
         } else {
           test.raw.push(`// MANUAL: projects: ${source},`);
-          warnManual(`projects is not a static array and could not be converted. Define test.projects manually.`);
+          warnManual('projects.dynamic', `projects is not a static array and could not be converted. Define test.projects manually.`);
         }
         hasMonorepoSignal = true;
-        warnInfo(`In Vitest 4, workspaces must be inline via test.projects. Do not generate a vitest.workspace.ts file.`);
+        if (targetVitest === 3) {
+          warnInfo(
+            'projects.inline',
+            `Targeting Vitest 3: projects were emitted under test.workspace (renamed to test.projects in Vitest 3.2). A vitest.workspace.ts file also works in 3.x but is deprecated.`
+          );
+        } else {
+          warnInfo('projects.inline', `In Vitest 4, workspaces must be inline via test.projects. Do not generate a vitest.workspace.ts file.`);
+        }
         break;
       case 'displayName':
         setScalar(test, 'name', source);
         break;
       case 'cacheDirectory':
       case 'cache':
-        warnInfo(`${key} is managed by Vite/Vitest internally; usually safe to drop.`);
+        warnInfo('field.removed', `${key} is managed by Vite/Vitest internally; usually safe to drop.`);
         break;
       case 'modulePathIgnorePatterns':
         test.raw.push(`// MANUAL: modulePathIgnorePatterns: ${source},`);
         warnManual(
+          'resolve.modulePaths',
           `modulePathIgnorePatterns has no direct Vitest equivalent. Review whether these paths should be excluded from test.include/test.exclude, coverage.exclude, or Vite resolution.`
         );
         break;
       case 'resetModules':
         warnVerify(
+          'mocks.modules',
           `resetModules controls Jest's module registry reset behavior. Vitest has vi.resetModules() for per-test use; verify module isolation expectations manually.`
         );
         break;
       case 'snapshotResolver':
         test.raw.push(`// MANUAL: snapshotResolver: ${source},`);
         warnManual(
+          'snapshot.resolver',
           `snapshotResolver cannot be copied directly. Vitest uses resolveSnapshotPath with a different function signature; port the resolver manually.`
         );
         break;
       case 'testResultsProcessor':
         test.raw.push(`// MANUAL: testResultsProcessor: ${source},`);
         warnManual(
+          'reporters.processor',
           `testResultsProcessor has no direct Vitest equivalent. Replace it with a Vitest reporter or post-processing step.`
         );
         break;
       case 'waitForUnhandledRejections':
         warnVerify(
+          'field.noEquivalent',
           `waitForUnhandledRejections has no direct Vitest config equivalent. Vitest handles unhandled rejections differently; verify async rejection failures on first run.`
         );
         break;
       default:
         test.raw.push(`// UNMAPPED: ${key}: ${source},`);
-        warnManual(`Unmapped Jest field '${key}' was preserved as a comment. Review and migrate manually.`);
+        warnManual('config.unmapped', `Unmapped Jest field '${key}' was preserved as a comment. Review and migrate manually.`);
     }
   });
 
@@ -992,10 +1334,10 @@ export function convertJestToVitest(
   // coverage object, so we skip that. We do, however, warn for legacy Vitest carryover values
   // when scanning the raw input for these tokens.
   if (/\bcoverage\.all\b/.test(input) || /coverage:\s*{[^}]*\ball:/.test(input)) {
-    warnInfo(`coverage.all was removed in Vitest 4. Replace with coverage.include patterns.`);
+    warnInfo('coverage.removed', `coverage.all was removed in Vitest 4. Replace with coverage.include patterns.`);
   }
   if (/\bcoverage\.ignoreEmptyLines\b/.test(input) || /coverage:\s*{[^}]*\bignoreEmptyLines:/.test(input)) {
-    warnInfo(`coverage.ignoreEmptyLines was removed in Vitest 4 (always true).`);
+    warnInfo('coverage.removed', `coverage.ignoreEmptyLines was removed in Vitest 4 (always true).`);
   }
 
   // ---- Behavioral migration warnings (apply regardless of mapped fields). ----
@@ -1004,6 +1346,7 @@ export function convertJestToVitest(
   // 1. vi.mock factory hoisting — surfaced when any mocking-related signal is present.
   if (hasMockingSignal) {
     warnVerify(
+      'mocks.hoisting',
       `vi.mock() factories are hoisted to the top of the file. Variables declared in the surrounding scope are NOT available inside the factory. Wrap them with vi.hoisted() or move them inside the factory.`
     );
   }
@@ -1011,6 +1354,7 @@ export function convertJestToVitest(
   // 2. Hook execution order — surfaced when setup files or global hooks are present.
   if (hasSetupFilesAfterEnv || test.scalars.has('globalSetup') || test.scalars.has('globalTeardown')) {
     warnInfo(
+      'behavior.hooks',
       `Hook execution order: Vitest defaults to parallel hook execution within a file. If your tests rely on Jest's strict sequential beforeAll/beforeEach order, set sequence.hooks: 'list' on the test config.`
     );
   }
@@ -1018,18 +1362,21 @@ export function convertJestToVitest(
   // 3. done callback removal — surfaced when legacy setup patterns are likely.
   if (hasSetupFilesAfterEnv) {
     warnInfo(
+      'setup.done',
       `Vitest does not support the 'done' callback in tests or hooks. Convert any 'done' usage to async/await or return a promise.`
     );
   }
 
   // 4. expect.getState().currentTestName separator change — generic behavioral note.
   warnInfo(
+    'behavior.currentTestName',
     `If any code reads expect.getState().currentTestName, note Jest joins describe/test names with a space while Vitest uses ' > '. Adjust string-matching logic accordingly.`
   );
 
   // 5. Framework-specific snapshot serializer warning.
   if (hasFrameworkSerializer) {
     warnVerify(
+      'snapshot.serializers',
       `Framework-specific snapshot serializer detected (e.g. enzyme-to-json, jest-serializer-vue). Verify the snapshot output is byte-identical under Vitest. Some serializers depend on Jest internals and may need a Vitest-compatible replacement.`
     );
   }
@@ -1037,19 +1384,20 @@ export function convertJestToVitest(
   // 6. No 'jest' namespace types — important for TypeScript users.
   if (looksLikeTypeScript || usesGlobalsTrue) {
     warnInfo(
+      'behavior.jestNamespace',
       `Vitest has no global 'jest' namespace. Replace 'jest.fn()', 'jest.spyOn()', 'jest.mock()', and 'jest.Mock' types with the equivalent 'vi' import from 'vitest', and update tsconfig types accordingly.`
     );
   }
 
   // Snapshot regeneration is an informational note — it's an action the user runs
   // (vitest run --update), not a semantic mismatch they need to verify.
-  warnInfo(`Snapshot regeneration is required on first run (format change from Jest).`);
+  warnInfo('snapshot.regen', `Snapshot regeneration is required on first run (format change from Jest).`);
 
   // ---- Output assembly ----
   if (needsTsconfigPaths) {
     rootImports.push(`import tsconfigPaths from 'vite-tsconfig-paths';`);
     rootPlugins.push(`tsconfigPaths()`);
-    warnManual(`pathsToModuleNameMapper detected. Included vite-tsconfig-paths. Run: npm i -D vite-tsconfig-paths`);
+    warnManual('resolve.tsconfigPaths', `pathsToModuleNameMapper detected. Included vite-tsconfig-paths. Run: ${pm.add('vite-tsconfig-paths')}`);
   }
   if (usedNextJest) {
     rootImports.unshift(`import react from '@vitejs/plugin-react';`);
@@ -1117,9 +1465,20 @@ export function convertJestToVitest(
     defineEntries.forEach((entry) => lines.push(`    ${entry},`));
     lines.push(`  },`);
   }
-  if (resolveAlias.size > 0 || resolveExtensions.length > 0) {
+  if (resolveAlias.size > 0 || resolveAliasRegex.length > 0 || resolveExtensions.length > 0) {
     lines.push(`  resolve: {`);
-    if (resolveAlias.size > 0) {
+    if (resolveAliasRegex.length > 0) {
+      // Vite accepts the array alias form; regex finds cannot be object keys.
+      lines.push(`    alias: [`);
+      resolveAlias.forEach((target, alias) => {
+        const formattedTarget = format ? prettyFormat(target, '      ') : target;
+        lines.push(`      { find: ${quoteAliasFind(alias)}, replacement: ${formattedTarget} },`);
+      });
+      resolveAliasRegex.forEach(({ find, replacement }) => {
+        lines.push(`      { find: ${find}, replacement: ${replacement} },`);
+      });
+      lines.push(`    ],`);
+    } else if (resolveAlias.size > 0) {
       lines.push(`    alias: {`);
       resolveAlias.forEach((target, alias) => {
         const formattedTarget = format ? prettyFormat(target, '      ') : target;
@@ -1133,6 +1492,11 @@ export function convertJestToVitest(
     }
     lines.push(`  },`);
   }
+  if (rootServerWatchIgnored.length > 0) {
+    lines.push(`  server: {`);
+    lines.push(`    watch: { ignored: [${rootServerWatchIgnored.map((g) => `'${g}'`).join(', ')}] }, // from watchPathIgnorePatterns`);
+    lines.push(`  },`);
+  }
   if (testLines.length > 0) {
     lines.push(`  test: {`);
     testLines.forEach((line) => lines.push(line));
@@ -1140,21 +1504,20 @@ export function convertJestToVitest(
   }
   lines.push(`});`);
 
-  // Tailored next steps.
-  tailoredNextSteps.push(`npm uninstall jest @types/jest ts-jest babel-jest`);
-  tailoredNextSteps.push(`npm install -D vitest`);
+  // Tailored next steps (commands follow the detected/selected package manager).
+  const versioned = (pkg: string) => (targetVitest === 3 ? `${pkg}@^3` : pkg);
+  tailoredNextSteps.push(pm.remove('jest @types/jest ts-jest babel-jest'));
+  tailoredNextSteps.push(pm.add(versioned('vitest')));
   if (needsCoverage && selectedCoverageProvider !== 'custom') {
     tailoredNextSteps.push(
-      selectedCoverageProvider === 'istanbul'
-        ? `npm install -D @vitest/coverage-istanbul`
-        : `npm install -D @vitest/coverage-v8`
+      pm.add(versioned(selectedCoverageProvider === 'istanbul' ? '@vitest/coverage-istanbul' : '@vitest/coverage-v8'))
     );
   }
-  if (needsJsdom) tailoredNextSteps.push(`npm install -D jsdom`);
-  if (needsHappyDom) tailoredNextSteps.push(`npm install -D happy-dom`);
-  if (needsTsconfigPaths) tailoredNextSteps.push(`npm install -D vite-tsconfig-paths`);
-  if (usedNextJest) tailoredNextSteps.push(`npm install -D @vitejs/plugin-react`);
-  if (needsSvgr) tailoredNextSteps.push(`npm install -D vite-plugin-svgr`);
+  if (needsJsdom) tailoredNextSteps.push(pm.add('jsdom'));
+  if (needsHappyDom) tailoredNextSteps.push(pm.add('happy-dom'));
+  if (needsTsconfigPaths) tailoredNextSteps.push(pm.add('vite-tsconfig-paths'));
+  if (usedNextJest) tailoredNextSteps.push(pm.add('@vitejs/plugin-react'));
+  if (needsSvgr) tailoredNextSteps.push(pm.add('vite-plugin-svgr'));
   tailoredNextSteps.push(`Update package.json scripts: "test": "vitest"`);
   if (usesGlobalsTrue) {
     tailoredNextSteps.push(`Add "vitest/globals" to compilerOptions.types in tsconfig.json`);
@@ -1169,6 +1532,7 @@ export function convertJestToVitest(
 
   if (hadDynamicProps) {
     warnManual(
+      'config.dynamic',
       `Dynamic / spread / computed-key properties were preserved as // MANUAL comments. Resolve them before running Vitest.`
     );
   }
@@ -1185,6 +1549,8 @@ export function convertJestToVitest(
       needsTsconfigPaths,
       needsSvgr,
       usesGlobalsTrue,
+      setupFiles: detectedSetupFiles,
+      targetVitest,
     },
   };
 
@@ -1198,16 +1564,17 @@ export function convertJestToVitest(
         const fallbackCount = aliasValueNode.elements.length;
         const first = aliasValueNode.elements[0];
         if (!first) {
-          warnManual(`moduleNameMapper entry '${aliasKey}' has an empty fallback array. Add the equivalent resolve.alias manually.`);
+          warnManual('resolve.alias', `moduleNameMapper entry '${aliasKey}' has an empty fallback array. Add the equivalent resolve.alias manually.`);
           return;
         }
         if (!t.isStringLiteral(first)) {
-          warnManual(`moduleNameMapper entry '${aliasKey}' uses a non-string fallback array. Add the equivalent resolve.alias manually.`);
+          warnManual('resolve.alias', `moduleNameMapper entry '${aliasKey}' uses a non-string fallback array. Add the equivalent resolve.alias manually.`);
           return;
         }
         aliasValueNode = first;
         if (fallbackCount > 1) {
           warnVerify(
+            'resolve.alias',
             `moduleNameMapper entry '${aliasKey}' has multiple fallback targets. Vitest resolve.alias only accepts one target, so the first static target was used.`
           );
         }
@@ -1225,6 +1592,7 @@ export function convertJestToVitest(
       // CSS / preprocessor stubs.
       if (/\\\.\(css|less|scss|sass|styl|stylus\)/.test(aliasKey)) {
         warnVerify(
+          'resolve.cssStub',
           `CSS stub for ${aliasKey} detected. Set test.css: false in Vitest, or use a Vite plugin if you need CSS modules typed.`
         );
         setScalar(test, 'css', 'false');
@@ -1251,10 +1619,12 @@ export function convertJestToVitest(
             rootPlugins.push('svgr()');
           }
           warnInfo(
+            'resolve.svgr',
             `SVG-to-component transformer (${aliasVal}) detected for ${aliasKey}. Replaced with the vite-plugin-svgr plugin; import SVGs as React components via './foo.svg?react'. The install step is added to the next-steps block.`
           );
         } else {
           warnVerify(
+            'resolve.assetStub',
             `Asset stub for ${aliasKey} -> ${aliasVal} detected. Vite serves assets as URLs by default; remove the stub, or add a Vite plugin (e.g. vite-plugin-svgr for SVG-as-component) if you relied on a transformer.`
           );
         }
@@ -1267,6 +1637,7 @@ export function convertJestToVitest(
       ) || /\\\.\((?:woff2?|eot|ttf|otf)\b/.test(aliasKey);
       if (fontMatch) {
         warnInfo(
+          'resolve.fontStub',
           `Font stub for ${aliasKey} detected. Vite handles font URLs natively. Drop the stub.`
         );
         return;
@@ -1276,6 +1647,29 @@ export function convertJestToVitest(
       let cleanKey = aliasKey.replace(/^\^/, '').replace(/\$$/, '');
       if (cleanKey.endsWith('/(.*)')) cleanKey = cleanKey.replace(/\/\(\.\*\)$/, '');
       else if (cleanKey.endsWith('(.*)')) cleanKey = cleanKey.replace(/\(\.\*\)$/, '');
+
+      // Keys that still carry regex syntax after the prefix cleanups (mid-string
+      // capture groups, alternations) cannot become string aliases. Vite's
+      // resolve.alias accepts the array form { find: /regex/, replacement } with
+      // $1-style backreferences, so emit that instead of a broken string alias.
+      if (/[()[\]{}|?+*\\^$]/.test(cleanKey)) {
+        const regexSource = aliasKey.replace(/\//g, '\\/');
+        let regexFind: string;
+        try {
+          // Validate the pattern before emitting it as a literal.
+          new RegExp(aliasKey);
+          regexFind = `/${regexSource}/`;
+        } catch {
+          warnManual('resolve.aliasRegex', `moduleNameMapper key '${aliasKey}' is not a valid regular expression. Add the equivalent resolve.alias manually.`);
+          return;
+        }
+        resolveAliasRegex.push({ find: regexFind, replacement: aliasVal });
+        warnVerify(
+          'resolve.aliasRegex',
+          `moduleNameMapper key '${aliasKey}' does not reduce to a string prefix. It was emitted as a regex alias ({ find: ${regexFind}, replacement: ${aliasVal} }); verify the capture-group substitution resolves correctly.`
+        );
+        return;
+      }
 
       let cleanVal = aliasVal;
       if (cleanVal.endsWith(`/$1'`) || cleanVal.endsWith(`/$1"`)) cleanVal = cleanVal.replace(/\/\$1(['"])$/, '$1');
@@ -1291,6 +1685,7 @@ export function convertJestToVitest(
           rootImports.unshift(`import path from 'node:path';`);
         }
         warnVerify(
+          'resolve.alias',
           `Relative alias '${cleanKey}' was rewritten with path.resolve(__dirname, ...) so Vite resolves it from the config file location.`
         );
       }
@@ -1304,12 +1699,13 @@ export function convertJestToVitest(
       const subKey = getPropName(p);
       if (!subKey) return;
       if (subKey === 'ts-jest') {
-        warnInfo(`globals['ts-jest'] dropped. Vitest handles TypeScript via Vite; no ts-jest config needed.`);
+        warnInfo('globals.define', `globals['ts-jest'] dropped. Vitest handles TypeScript via Vite; no ts-jest config needed.`);
         return;
       }
       define.set(subKey, getSourceCode(p.value as t.Node));
     });
     warnManual(
+      'globals.define',
       `Jest 'globals' object values were moved to root-level Vite 'define'. Note that 'globals: true' in Vitest exposes test APIs and is unrelated to injected constants.`
     );
   }
@@ -1317,7 +1713,7 @@ export function convertJestToVitest(
   function handleCoverageThreshold(value: t.Node, source: string) {
     if (!t.isObjectExpression(value)) {
       setScalar(coverage, 'thresholds', source);
-      warnManual(`coverageThreshold value ${source} is not a static object. Verify coverage.thresholds manually.`);
+      warnManual('coverage.thresholds', `coverageThreshold value ${source} is not a static object. Verify coverage.thresholds manually.`);
       return;
     }
 
@@ -1365,7 +1761,7 @@ export function convertJestToVitest(
 
     if (fallbackToOriginal || thresholdEntries.length === 0) {
       setScalar(coverage, 'thresholds', source);
-      warnManual(`coverageThreshold.global could not be unwrapped. Verify coverage.thresholds manually.`);
+      warnManual('coverage.thresholds', `coverageThreshold.global could not be unwrapped. Verify coverage.thresholds manually.`);
       return;
     }
 
@@ -1373,22 +1769,23 @@ export function convertJestToVitest(
     coverage.noteFor.set('thresholds', `VERIFY: V8 AST remapping in Vitest 4 may shift previously-passing thresholds — re-baseline${sawPathThreshold ? '; path thresholds: Vitest keeps matching files in global thresholds' : ''}`);
 
     if (sawGlobal) {
-      warnInfo(`coverageThreshold.global was unwrapped into Vitest coverage.thresholds.`);
+      warnInfo('coverage.thresholds', `coverageThreshold.global was unwrapped into Vitest coverage.thresholds.`);
     }
     if (sawPathThreshold) {
       warnVerify(
+        'coverage.thresholds',
         `Jest subtracts path/glob coverageThreshold groups from global thresholds. Vitest keeps matching files in global thresholds, so review mixed global and path thresholds.`
       );
     }
     if (hadDynamic) {
-      warnManual(`Some dynamic coverageThreshold entries could not be converted. Review coverage.thresholds manually.`);
+      warnManual('coverage.thresholds', `Some dynamic coverageThreshold entries could not be converted. Review coverage.thresholds manually.`);
     }
   }
 
   function handleCoverageIncludePatterns(value: t.Node, source: string) {
     if (!t.isArrayExpression(value)) {
       appendArray(coverage, 'include', source);
-      warnVerify(`collectCoverageFrom was not a static array. Verify coverage.include manually, especially any negated patterns.`);
+      warnVerify('coverage.include', `collectCoverageFrom was not a static array. Verify coverage.include manually, especially any negated patterns.`);
       return;
     }
 
@@ -1414,10 +1811,10 @@ export function convertJestToVitest(
     }
     if (excludeItems.length > 0) {
       coverage.arrays.set('exclude', [...(coverage.arrays.get('exclude') ?? []), ...excludeItems]);
-      warnInfo(`Negated collectCoverageFrom patterns were moved to coverage.exclude.`);
+      warnInfo('coverage.include', `Negated collectCoverageFrom patterns were moved to coverage.exclude.`);
     }
     if (dynamic) {
-      warnManual(`Some collectCoverageFrom entries were dynamic. Verify coverage.include and coverage.exclude manually.`);
+      warnManual('coverage.include', `Some collectCoverageFrom entries were dynamic. Verify coverage.include and coverage.exclude manually.`);
     }
   }
 
@@ -1426,27 +1823,38 @@ export function convertJestToVitest(
     if (literal === 'jest-environment-jsdom') {
       setScalar(section, 'environment', `'jsdom'`);
       needsJsdom = true;
-      warnInfo(`testEnvironment 'jest-environment-jsdom' was normalized to Vitest environment 'jsdom'. Install the 'jsdom' package.`);
+      warnInfo('env.environment', `testEnvironment 'jest-environment-jsdom' was normalized to Vitest environment 'jsdom'. Install the 'jsdom' package.`);
     } else if (literal === 'jest-environment-node') {
       setScalar(section, 'environment', `'node'`);
-      warnInfo(`testEnvironment 'jest-environment-node' was normalized to Vitest environment 'node'.`);
+      warnInfo('env.environment', `testEnvironment 'jest-environment-node' was normalized to Vitest environment 'node'.`);
+    } else if (literal === '@happy-dom/jest-environment') {
+      setScalar(section, 'environment', `'happy-dom'`);
+      needsHappyDom = true;
+      warnInfo('env.environment', `testEnvironment '@happy-dom/jest-environment' was normalized to Vitest environment 'happy-dom'. Install the 'happy-dom' package.`);
     } else {
       setScalar(section, 'environment', source);
     }
     if (literal === 'jsdom') {
       needsJsdom = true;
-      warnInfo(`environment 'jsdom' requires installing the 'jsdom' package.`);
+      warnInfo('env.environment', `environment 'jsdom' requires installing the 'jsdom' package.`);
     } else if (literal === 'happy-dom') {
       needsHappyDom = true;
-      warnInfo(`environment 'happy-dom' requires installing the 'happy-dom' package.`);
-    } else if (literal === 'node' || literal === 'jest-environment-jsdom' || literal === 'jest-environment-node') {
+      warnInfo('env.environment', `environment 'happy-dom' requires installing the 'happy-dom' package.`);
+    } else if (
+      literal === 'node' ||
+      literal === 'jest-environment-jsdom' ||
+      literal === 'jest-environment-node' ||
+      literal === '@happy-dom/jest-environment'
+    ) {
       // built-in after normalization, no further checks needed
     } else if (literal && (literal.startsWith('.') || literal.endsWith('.js') || literal.endsWith('.ts') || literal.endsWith('.cjs') || literal.endsWith('.mjs'))) {
       warnManual(
+        'env.environment',
         `Custom testEnvironment file '${literal}' detected. Vitest's environment interface differs from Jest. Port the environment module manually.`
       );
     } else if (literal) {
       warnVerify(
+        'env.environment',
         `Custom testEnvironment '${literal}' detected. Verify it is published as a Vitest-compatible environment package.`
       );
     }
@@ -1460,6 +1868,7 @@ export function convertJestToVitest(
     if (!t.isObjectExpression(value)) {
       section.raw.push(`// MANUAL: testEnvironmentOptions: ${getCompactSourceCode(value)},`);
       warnManual(
+        'env.options',
         `${context}testEnvironmentOptions is not a static object and could not be namespaced. Nest the options under the environment name manually (e.g. environmentOptions: { jsdom: { ... } }).`
       );
       return;
@@ -1469,7 +1878,7 @@ export function convertJestToVitest(
     for (const p of value.properties) {
       if (!t.isObjectProperty(p) || p.computed) {
         section.raw.push(`// MANUAL: testEnvironmentOptions entry ${getCompactSourceCode(p)},`);
-        warnManual(`${context}testEnvironmentOptions contains a dynamic entry that could not be converted.`);
+        warnManual('env.options', `${context}testEnvironmentOptions contains a dynamic entry that could not be converted.`);
         continue;
       }
       const key = getPropName(p);
@@ -1482,6 +1891,7 @@ export function convertJestToVitest(
     }
     if (hadCustomExportConditions) {
       warnManual(
+        'env.options',
         `${context}testEnvironmentOptions.customExportConditions was dropped: Vitest has no equivalent. If it was the MSW workaround, MSW needs no export-condition override under Vitest. Otherwise set resolve.conditions in the Vite config.`
       );
     }
@@ -1492,22 +1902,26 @@ export function convertJestToVitest(
     if (envLiteral === 'happy-dom') {
       setScalar(section, 'environmentOptions', `{ happyDOM: ${inner} }`);
       warnVerify(
+        'env.options',
         `${context}testEnvironmentOptions was nested under environmentOptions.happyDOM. Verify each option is supported by happy-dom; Jest and happy-dom option names do not always match.`
       );
     } else if (envLiteral === 'jsdom' || envLiteral === '') {
       setScalar(section, 'environmentOptions', `{ jsdom: ${inner} }`);
       if (envLiteral === '') {
         warnVerify(
+          'env.options',
           `${context}testEnvironmentOptions was nested under environmentOptions.jsdom, but no testEnvironment was set (Jest defaults to node, which takes no options). Verify the jsdom namespace is the right one.`
         );
       } else {
         warnVerify(
+          'env.options',
           `${context}testEnvironmentOptions was nested under environmentOptions.jsdom (Vitest namespaces environment options per environment; flat keys are ignored). Verify each option is a valid jsdom constructor option.`
         );
       }
     } else {
       section.raw.push(`// MANUAL: testEnvironmentOptions: ${getCompactSourceCode(value)},`);
       warnManual(
+        'env.options',
         `${context}testEnvironmentOptions targets environment ${envValue || 'unknown'}, which takes no options in Vitest (only jsdom and happy-dom do). Port the options manually if the custom environment reads them.`
       );
     }
@@ -1535,12 +1949,12 @@ export function convertJestToVitest(
     obj.properties.forEach((p) => {
       if (t.isSpreadElement(p)) {
         proj.raw.push(`// MANUAL: spread '...${getCompactSourceCode(p.argument)}' could not be statically resolved.`);
-        warnManual(`projects ${label}: spread entries cannot be statically converted. Inline the values.`);
+        warnManual('projects.field', `projects ${label}: spread entries cannot be statically converted. Inline the values.`);
         return;
       }
       if (!t.isObjectProperty(p) || p.computed) {
         proj.raw.push(`// MANUAL: a dynamic property could not be converted.`);
-        warnManual(`projects ${label}: a dynamic property could not be statically converted.`);
+        warnManual('projects.field', `projects ${label}: a dynamic property could not be statically converted.`);
         return;
       }
       const key = getPropName(p);
@@ -1554,7 +1968,7 @@ export function convertJestToVitest(
               (pp): pp is t.ObjectProperty => t.isObjectProperty(pp) && getPropName(pp) === 'name'
             );
             if (nameProp) setScalar(proj, 'name', getSourceCode(nameProp.value as t.Node));
-            warnInfo(`projects ${label}: displayName color was dropped; a Vitest project name is a plain string.`);
+            warnInfo('projects.field', `projects ${label}: displayName color was dropped; a Vitest project name is a plain string.`);
           } else {
             setScalar(proj, 'name', source);
           }
@@ -1563,11 +1977,7 @@ export function convertJestToVitest(
           appendArray(proj, 'include', source);
           break;
         case 'testRegex':
-          if (!proj.arrays.has('include')) {
-            appendArray(proj, 'include', `['**/*.{test,spec}.{ts,tsx,js,jsx}']`);
-          }
-          proj.noteFor.set('include', `VERIFY: testRegex ${getCompactSourceCode(value)} was converted to default Vitest glob`);
-          warnVerify(`projects ${label}: testRegex was converted to the default Vitest glob. Verify file matching.`);
+          handleTestRegex(value, proj, `projects ${label}: `);
           break;
         case 'testEnvironment':
           applyTestEnvironment(proj, value, source);
@@ -1582,6 +1992,7 @@ export function convertJestToVitest(
           if (t.isArrayExpression(value)) {
             if (value.elements.length > 1) {
               warnInfo(
+                'discovery.roots',
                 `projects ${label}: roots had ${value.elements.length} entries; Vitest test.dir takes a single directory. Kept the first.`
               );
             }
@@ -1592,9 +2003,11 @@ export function convertJestToVitest(
           break;
         case 'setupFiles':
         case 'setupFilesAfterEnv':
+          collectSetupPaths(value);
           appendArray(proj, 'setupFiles', source);
           if (key === 'setupFilesAfterEnv') {
             warnVerify(
+              'setup.order',
               `setupFilesAfterEnv runs after the test framework in Jest; in Vitest setupFiles runs before tests. Move framework-dependent calls (e.g. expect.extend) into a setup that imports vitest first.`
             );
           }
@@ -1609,7 +2022,7 @@ export function convertJestToVitest(
           break;
         default:
           proj.raw.push(`// MANUAL: ${key}: ${getCompactSourceCode(value)},`);
-          warnManual(`projects ${label}: '${key}' was not converted. Port it into this project's config manually.`);
+          warnManual('projects.field', `projects ${label}: '${key}' was not converted. Port it into this project's config manually.`);
       }
     });
     if (projEnvOptions) {
@@ -1620,12 +2033,13 @@ export function convertJestToVitest(
 
   // Render the captured Jest projects array as Vitest test.projects lines
   // (relative indentation; renderSection prefixes the test-block indent).
+  // Vitest 3 used the test.workspace key (renamed to test.projects in 3.2).
   function renderProjectsLines(arr: t.ArrayExpression): string[] {
-    const lines: string[] = ['projects: ['];
+    const lines: string[] = [targetVitest === 3 ? 'workspace: [' : 'projects: ['];
     arr.elements.forEach((el, i) => {
       if (!el) return;
       if (t.isStringLiteral(el)) {
-        lines.push(`  '${stripRootDir(el.value)}',`);
+        lines.push(`  '${normalizeRootDir(el.value)}',`);
         return;
       }
       if (t.isObjectExpression(el)) {
@@ -1638,10 +2052,185 @@ export function convertJestToVitest(
         return;
       }
       lines.push(`  // MANUAL: project entry ${getCompactSourceCode(el as t.Node)} could not be statically converted.`);
-      warnManual(`projects entry #${i + 1} is not a static object or string and was not converted.`);
+      warnManual('projects.dynamic', `projects entry #${i + 1} is not a static object or string and was not converted.`);
     });
     lines.push('],');
     return lines;
+  }
+
+  // Convert testRegex to equivalent glob(s) where the pattern is simple enough;
+  // fall back to the default Vitest glob with a verify warning otherwise.
+  // Shared by the root config and project entries (label prefixes the warning).
+  function handleTestRegex(value: t.Node, section: ConfigSection, label: string) {
+    const patterns: string[] = [];
+    let allStatic = true;
+    if (t.isStringLiteral(value)) {
+      patterns.push(value.value);
+    } else if (t.isArrayExpression(value)) {
+      value.elements.forEach((el) => {
+        if (el && t.isStringLiteral(el)) patterns.push(el.value);
+        else allStatic = false;
+      });
+    } else {
+      allStatic = false;
+    }
+
+    const globs: string[] = [];
+    let allConverted = allStatic && patterns.length > 0;
+    for (const pat of patterns) {
+      const converted = convertTestRegexToGlobs(pat);
+      if (converted) {
+        converted.forEach((g) => {
+          if (!globs.includes(g)) globs.push(g);
+        });
+      } else {
+        allConverted = false;
+      }
+    }
+
+    if (allConverted) {
+      appendArray(section, 'include', `[${globs.map((g) => JSON.stringify(g)).join(', ')}]`);
+      section.noteFor.set('include', `VERIFY: converted from testRegex ${getCompactSourceCode(value)} — verify file matching`);
+      warnVerify(
+        'discovery.testRegex',
+        `${label}testRegex ${getCompactSourceCode(value)} was converted to glob pattern(s): ${globs.join(', ')}. Regexes and globs match differently on edge cases — verify the matched file set.`
+      );
+      return;
+    }
+
+    if (!section.arrays.has('include')) {
+      appendArray(section, 'include', `['**/*.{test,spec}.{ts,tsx,js,jsx}']`);
+    }
+    section.noteFor.set('include', `VERIFY: testRegex ${getCompactSourceCode(value)} was converted to default Vitest glob — verify file matching`);
+    section.raw.push(`// NOTE: testRegex was ${getCompactSourceCode(value)}. Verify file matching against the default Vitest glob.`);
+    warnVerify(
+      'discovery.testRegex',
+      `${label}testRegex could not be converted to an equivalent glob; the default Vitest glob was used instead. Verify file matching.`
+    );
+  }
+
+  // Map known third-party reporters to Vitest built-ins instead of copying a
+  // reporter package name that crashes unless it stays installed.
+  function handleReporters(value: t.Node, source: string) {
+    if (!t.isArrayExpression(value)) {
+      warnManual('reporters.dynamic', `reporters value ${source} is not a static array. Re-author for Vitest's reporter API.`);
+      return;
+    }
+
+    const rendered: string[] = [];
+    let copiedVerbatim = false;
+
+    const reporterName = (el: t.Node): string | null => {
+      if (t.isStringLiteral(el)) return el.value;
+      if (t.isArrayExpression(el) && el.elements[0] && t.isStringLiteral(el.elements[0])) {
+        return el.elements[0].value;
+      }
+      return null;
+    };
+
+    value.elements.forEach((el) => {
+      if (!el) return;
+      const node = el as t.Node;
+      const name = reporterName(node);
+
+      if (name === 'jest-junit') {
+        const options = t.isArrayExpression(node) && node.elements[1] && t.isObjectExpression(node.elements[1])
+          ? node.elements[1]
+          : null;
+        let outputFile: string | null = null;
+        let dir: string | null = null;
+        let fileName: string | null = null;
+        let droppedKeys: string[] = [];
+        let dynamicOptions = false;
+        if (options) {
+          for (const p of options.properties) {
+            if (!t.isObjectProperty(p) || p.computed) {
+              dynamicOptions = true;
+              continue;
+            }
+            const optKey = getPropName(p);
+            const optVal = t.isStringLiteral(p.value) ? p.value.value : null;
+            if (optKey === 'outputFile') {
+              if (optVal != null) outputFile = optVal;
+              else dynamicOptions = true;
+            } else if (optKey === 'outputDirectory') {
+              if (optVal != null) dir = optVal;
+              else dynamicOptions = true;
+            } else if (optKey === 'outputName') {
+              if (optVal != null) fileName = optVal;
+              else dynamicOptions = true;
+            } else if (optKey) {
+              droppedKeys.push(optKey);
+            }
+          }
+        }
+        if (dynamicOptions) {
+          rendered.push(getSourceCode(node));
+          copiedVerbatim = true;
+          warnVerify('reporters.verbatim', `jest-junit options could not be read statically and were copied verbatim. Map them to Vitest's ['junit', { outputFile }] manually.`);
+          return;
+        }
+        const resolvedFile =
+          outputFile ?? (dir != null || fileName != null ? `${normalizeRootDir(dir ?? '.')}/${fileName ?? 'junit.xml'}`.replace(/^\.\//, '') : 'junit.xml');
+        rendered.push(`['junit', { outputFile: ${JSON.stringify(resolvedFile)} }]`);
+        warnInfo('reporters.mapped', `jest-junit was mapped to Vitest's built-in junit reporter (outputFile: ${resolvedFile}). Uninstall jest-junit.`);
+        if (droppedKeys.length > 0) {
+          warnVerify('reporters.mapped', `jest-junit option(s) ${droppedKeys.join(', ')} have no Vitest junit equivalent and were dropped. Check Vitest's junit reporter options if you relied on them.`);
+        }
+        return;
+      }
+
+      if (name === 'github-actions') {
+        rendered.push(`'github-actions'`);
+        warnInfo('reporters.mapped', `The github-actions reporter was mapped to Vitest's built-in 'github-actions' reporter (options, if any, were dropped).`);
+        return;
+      }
+
+      rendered.push(getSourceCode(node));
+      if (name == null || !VITEST_BUILTIN_REPORTERS.has(name)) copiedVerbatim = true;
+    });
+
+    appendArray(test, 'reporters', `[${rendered.join(', ')}]`);
+    if (copiedVerbatim) {
+      test.noteFor.set('reporters', `VERIFY: Jest and Vitest built-in reporter names differ (default/verbose/dot/json/junit/tap/html)`);
+      warnVerify(
+        'reporters.verbatim',
+        `Some reporters were copied verbatim. Jest and Vitest built-in reporter names differ (e.g. 'default', 'verbose', 'dot', 'json', 'junit', 'tap', 'html').`
+      );
+    }
+  }
+
+  // Emit Vite's server.watch.ignored for static patterns; fall back to the
+  // manual warning for regex/dynamic inputs.
+  function handleWatchPathIgnorePatterns(value: t.Node, source: string) {
+    if (!t.isArrayExpression(value)) {
+      warnManual(
+        'watch.ignored',
+        `watchPathIgnorePatterns is not a static array. Use Vite's server.watch.ignored in the emitted config manually.`
+      );
+      return;
+    }
+    let fellBack = false;
+    value.elements.forEach((el) => {
+      if (el && t.isStringLiteral(el)) {
+        const glob = convertSimpleIgnorePatternToGlob(el.value);
+        if (glob) {
+          const anchored = glob.startsWith('**') ? glob : `**/${glob}`;
+          if (!rootServerWatchIgnored.includes(anchored)) rootServerWatchIgnored.push(anchored);
+          return;
+        }
+      }
+      fellBack = true;
+    });
+    if (rootServerWatchIgnored.length > 0) {
+      warnInfo('watch.ignored', `watchPathIgnorePatterns was mapped to Vite's server.watch.ignored in the emitted config.`);
+    }
+    if (fellBack) {
+      warnManual(
+        'watch.ignored',
+        `Some watchPathIgnorePatterns entries (${source}) are regexes or dynamic values that do not translate to globs. Add them to server.watch.ignored manually.`
+      );
+    }
   }
 
   function handleRegexIgnorePatterns(
@@ -1652,7 +2241,7 @@ export function convertJestToVitest(
   ) {
     if (!t.isArrayExpression(value)) {
       section.raw.push(`// MANUAL: ${sourceKey}: ${getSourceCode(value)},`);
-      warnManual(`${sourceKey} is not a static array. Convert regex path ignores to Vitest glob excludes manually.`);
+      warnManual('discovery.exclude', `${sourceKey} is not a static array. Convert regex path ignores to Vitest glob excludes manually.`);
       return;
     }
 
@@ -1660,7 +2249,7 @@ export function convertJestToVitest(
     value.elements.forEach((el) => {
       if (!t.isStringLiteral(el)) {
         if (el) section.raw.push(`// MANUAL: ${sourceKey} entry ${getSourceCode(el as t.Node)}`);
-        warnManual(`${sourceKey} contains a dynamic entry. Convert it to a Vitest glob manually.`);
+        warnManual('discovery.exclude', `${sourceKey} contains a dynamic entry. Convert it to a Vitest glob manually.`);
         return;
       }
 
@@ -1670,6 +2259,7 @@ export function convertJestToVitest(
       } else {
         section.raw.push(`// MANUAL: ${sourceKey} regex ${JSON.stringify(el.value)} was not copied to ${targetKey}.`);
         warnVerify(
+          'discovery.exclude',
           `${sourceKey} regex pattern ${JSON.stringify(el.value)} was not copied because Vitest ${targetKey} expects glob patterns. Convert it manually.`
         );
       }
@@ -1682,7 +2272,7 @@ export function convertJestToVitest(
 
   function handleTransform(value: t.Node) {
     if (!t.isObjectExpression(value)) {
-      warnInfo(`transform value ${getSourceCode(value)} could not be inspected. Vite handles most transforms natively.`);
+      warnInfo('transform.custom', `transform value ${getSourceCode(value)} could not be inspected. Vite handles most transforms natively.`);
       return;
     }
     let dropped = 0;
@@ -1696,28 +2286,50 @@ export function convertJestToVitest(
         ? getSourceCode(targetNode as t.Node)
         : getSourceCode(targetNode as t.Node);
 
-      if (typeof targetSrc === 'string' && (targetSrc.includes('ts-jest') || targetSrc.includes('babel-jest'))) {
+      // ts-jest / babel-jest / @swc/jest are all "compile TS/JS for Jest":
+      // Vite's own transform pipeline replaces them with nothing to configure.
+      if (
+        typeof targetSrc === 'string' &&
+        (targetSrc.includes('ts-jest') || targetSrc.includes('babel-jest') || targetSrc.includes('@swc/jest'))
+      ) {
         dropped++;
+        return;
+      }
+      // Framework single-file-component transforms map to concrete Vite plugins.
+      if (typeof targetSrc === 'string' && /@vue\/vue3-jest|vue3-jest|\bvue-jest\b/.test(targetSrc)) {
+        warnVerify(
+          'transform.framework',
+          `transform entry '${matcher}' uses ${targetSrc}. Vite compiles .vue files via @vitejs/plugin-vue — add it to the plugins array (npm i -D @vitejs/plugin-vue) and drop the transform.`
+        );
+        return;
+      }
+      if (typeof targetSrc === 'string' && targetSrc.includes('svelte-jester')) {
+        warnVerify(
+          'transform.framework',
+          `transform entry '${matcher}' uses ${targetSrc}. Vite compiles .svelte files via @sveltejs/vite-plugin-svelte — add it to the plugins array (npm i -D @sveltejs/vite-plugin-svelte) and drop the transform.`
+        );
         return;
       }
       // File-stub transforms (e.g. jest-transform-stub, jest-svg-transformer) usually become Vite plugins or are unnecessary.
       if (typeof targetSrc === 'string' && /transform-stub|svg-transformer|file-transformer/.test(targetSrc)) {
         warnVerify(
+          'transform.fileStub',
           `transform entry '${matcher}' uses a file-stub transformer (${targetSrc}). Replace with the appropriate Vite plugin or rely on Vite's asset handling.`
         );
         return;
       }
       warnManual(
+        'transform.custom',
         `transform entry '${matcher}' -> ${typeof targetSrc === 'string' ? targetSrc : 'custom transformer'} has no direct equivalent. Replace with a Vite plugin or migrate the transformer.`
       );
     });
     if (dropped > 0) {
-      warnInfo(`Dropped ${dropped} ts-jest/babel-jest transform entr${dropped === 1 ? 'y' : 'ies'}. Vite handles them natively.`);
+      warnInfo('transform.dropped', `Dropped ${dropped} ts-jest/babel-jest/@swc/jest transform entr${dropped === 1 ? 'y' : 'ies'}. Vite handles them natively.`);
     }
   }
 }
 
-function emptyFlags(): ConversionFlags {
+function emptyFlags(targetVitest: TargetVitest = 4): ConversionFlags {
   return {
     monorepo: false,
     embeddedParent: null,
@@ -1727,13 +2339,249 @@ function emptyFlags(): ConversionFlags {
     needsTsconfigPaths: false,
     needsSvgr: false,
     usesGlobalsTrue: false,
+    setupFiles: [],
+    targetVitest,
   };
 }
+
+// Reporter names that are valid Vitest built-ins as-is (no verbatim warning).
+const VITEST_BUILTIN_REPORTERS = new Set([
+  'default',
+  'verbose',
+  'dot',
+  'json',
+  'junit',
+  'tap',
+  'tap-flat',
+  'html',
+  'hanging-process',
+  'github-actions',
+]);
 
 function quoteKey(key: string): string {
   if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key)) return key;
   if (!key.includes("'") && !/[\\\n\r\t]/.test(key)) return `'${key}'`;
   return JSON.stringify(key);
+}
+
+// Quote an alias key for the array-form `{ find: ... }` position (always a
+// string literal there, unlike object keys which may stay bare).
+function quoteAliasFind(key: string): string {
+  if (!key.includes("'") && !/[\\\n\r\t]/.test(key)) return `'${key}'`;
+  return JSON.stringify(key);
+}
+
+/**
+ * Path-aware `<rootDir>` normalizer for a single string value. Each occurrence
+ * is substituted based on its position rather than a blanket replace:
+ *   '<rootDir>'           -> '.'        (the root directory itself)
+ *   '<rootDir>/src/x'     -> './src/x'  (leading path anchor)
+ *   '^<rootDir>/src'      -> '^src'     (after a regex anchor: collapse)
+ *   'foo/<rootDir>/bar'   -> 'foo/bar'  (mid-string after a separator: collapse)
+ *   'foo<rootDir>/bar'    -> 'foo/bar'  (mid-string: keep one separator)
+ * Strings without the token (package names, plain globs/paths) are untouched.
+ */
+export function normalizeRootDir(value: string): string {
+  if (!value.includes('<rootDir>')) return value;
+  let out = '';
+  let i = 0;
+  while (i < value.length) {
+    const idx = value.indexOf('<rootDir>', i);
+    if (idx === -1) {
+      out += value.slice(i);
+      break;
+    }
+    out += value.slice(i, idx);
+    let next = idx + '<rootDir>'.length;
+    const hasSlash = value[next] === '/';
+    if (hasSlash) next++;
+    const prev = out[out.length - 1];
+    if (out === '') {
+      out += next >= value.length && !hasSlash ? '.' : './';
+    } else if (prev === '/' || prev === '^' || prev === '(' || prev === '|') {
+      // After a separator or regex anchor: the token collapses entirely.
+    } else if (hasSlash) {
+      out += '/';
+    }
+    i = next;
+  }
+  return out;
+}
+
+/**
+ * `<rootDir>` normalizer for generated source code. The token only ever
+ * appears inside string contents, so the position-aware rules above are
+ * applied with the preceding quote character treated as string start.
+ */
+export function normalizeRootDirInCode(code: string): string {
+  if (!code.includes('<rootDir>')) return code;
+  return code.replace(/<rootDir>(\/)?/g, (match, slash: string | undefined, offset: number) => {
+    const prev = offset > 0 ? code[offset - 1] : '';
+    const next = code[offset + match.length] ?? '';
+    if (prev === `'` || prev === '"' || prev === '`') {
+      // String start.
+      if (!slash && next === prev) return '.'; // '<rootDir>' alone
+      return './';
+    }
+    if (prev === '/' || prev === '^' || prev === '(' || prev === '|') return '';
+    return slash ? '/' : '';
+  });
+}
+
+/**
+ * Translate a Jest testRegex into equivalent Vitest include glob(s), or null
+ * when the pattern uses regex features without a faithful glob translation.
+ *
+ * Covers: simple suffix matchers (`\.test\.tsx?$`), `__tests__/` directory
+ * matchers, extension alternates (`[jt]sx?`, `(js|jsx|ts|tsx)`), and the
+ * classic Jest/CRA default `(/__tests__/.*|(\.|/)(test|spec))\.[jt]sx?$`.
+ */
+export function convertTestRegexToGlobs(pattern: string): string[] | null {
+  let p = pattern.replace(/<rootDir>\/?/g, '');
+  const anchoredStart = p.startsWith('^');
+  const anchoredEnd = p.endsWith('$') && !p.endsWith('\\$');
+  p = p.replace(/^\^/, '').replace(/\$$/, '');
+  if (!p) return null;
+
+  // Idiomatic extension classes → brace placeholders (⟨⟩ avoids re-processing
+  // and survives the alternation expansion below).
+  p = p
+    .replace(/\[jt\]sx\?/g, '⟨js,jsx,ts,tsx⟩')
+    .replace(/\[tj\]sx\?/g, '⟨js,jsx,ts,tsx⟩')
+    .replace(/\((?:\?:)?js\|jsx\|ts\|tsx\)/g, '⟨js,jsx,ts,tsx⟩')
+    .replace(/\((?:\?:)?jsx\?\|tsx\?\)/g, '⟨js,jsx,ts,tsx⟩')
+    .replace(/\[jt\]s/g, '⟨js,ts⟩')
+    .replace(/\[tj\]s/g, '⟨js,ts⟩')
+    .replace(/jsx\?/g, '⟨js,jsx⟩')
+    .replace(/tsx\?/g, '⟨ts,tsx⟩')
+    .replace(/mjsx\?/g, '⟨mjs,mjsx⟩');
+
+  // Expand (a|b) / (?:a|b) groups and top-level alternation into separate
+  // pattern strings, capped to keep pathological inputs out.
+  const expanded = expandRegexAlternation(p, 12);
+  if (!expanded) return null;
+
+  const globs: string[] = [];
+  for (const alt of expanded) {
+    let g = alt;
+    // `/.*` spans directories; a bare `.*` stays within one path segment.
+    g = g.replace(/\/\.\*/g, '/**/*').replace(/\.\*/g, '*');
+    // Unescape the two path characters Jest patterns escape.
+    g = g.replace(/\\\./g, '.').replace(/\\\//g, '/');
+    // Anything still carrying regex syntax has no faithful glob translation.
+    if (/[\\^$()[\]{}+?|]/.test(g)) return null;
+
+    if (anchoredStart) {
+      g = g.replace(/^\//, '');
+    } else if (g.startsWith('/')) {
+      g = `**${g}`;
+    } else if (g.startsWith('.')) {
+      g = `**/*${g}`;
+    } else if (!g.startsWith('**')) {
+      g = `**/${g}`;
+    }
+    if (!anchoredEnd && !g.endsWith('*')) g = `${g}*`;
+    g = g.replace(/⟨/g, '{').replace(/⟩/g, '}');
+    if (!globs.includes(g)) globs.push(g);
+  }
+  return globs.length > 0 ? globs : null;
+}
+
+// Expand the first (…|…) group recursively; null when unbalanced or too many
+// alternatives. Nested groups are handled by recursion on each expansion.
+function expandRegexAlternation(pattern: string, cap: number): string[] | null {
+  // Top-level alternation outside any group.
+  const topLevel = splitTopLevel(pattern);
+  if (topLevel == null) return null;
+  if (topLevel.length > 1) {
+    const out: string[] = [];
+    for (const part of topLevel) {
+      const sub = expandRegexAlternation(part, cap);
+      if (!sub) return null;
+      out.push(...sub);
+      if (out.length > cap) return null;
+    }
+    return out;
+  }
+
+  const start = findUnescaped(pattern, '(');
+  if (start === -1) return [pattern];
+  let depth = 0;
+  let end = -1;
+  for (let i = start; i < pattern.length; i++) {
+    const ch = pattern[i];
+    if (ch === '\\') {
+      i++;
+      continue;
+    }
+    if (ch === '(') depth++;
+    else if (ch === ')') {
+      depth--;
+      if (depth === 0) {
+        end = i;
+        break;
+      }
+    }
+  }
+  if (end === -1) return null;
+  // Quantified groups ((...)?, (...)*) are out of scope.
+  const after = pattern[end + 1];
+  if (after === '?' || after === '*' || after === '+') return null;
+
+  let body = pattern.slice(start + 1, end);
+  if (body.startsWith('?:')) body = body.slice(2);
+  else if (body.startsWith('?')) return null; // lookarounds etc.
+  const branches = splitTopLevel(body);
+  if (branches == null) return null;
+
+  const prefix = pattern.slice(0, start);
+  const suffix = pattern.slice(end + 1);
+  const out: string[] = [];
+  for (const branch of branches) {
+    const sub = expandRegexAlternation(`${prefix}${branch}${suffix}`, cap);
+    if (!sub) return null;
+    out.push(...sub);
+    if (out.length > cap) return null;
+  }
+  return out;
+}
+
+// Split on top-level '|' (outside parens). Null when parens are unbalanced.
+function splitTopLevel(pattern: string): string[] | null {
+  const parts: string[] = [];
+  let depth = 0;
+  let buf = '';
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i];
+    if (ch === '\\') {
+      buf += ch + (pattern[i + 1] ?? '');
+      i++;
+      continue;
+    }
+    if (ch === '(') depth++;
+    else if (ch === ')') depth--;
+    if (depth < 0) return null;
+    if (ch === '|' && depth === 0) {
+      parts.push(buf);
+      buf = '';
+      continue;
+    }
+    buf += ch;
+  }
+  if (depth !== 0) return null;
+  parts.push(buf);
+  return parts;
+}
+
+function findUnescaped(pattern: string, ch: string): number {
+  for (let i = 0; i < pattern.length; i++) {
+    if (pattern[i] === '\\') {
+      i++;
+      continue;
+    }
+    if (pattern[i] === ch) return i;
+  }
+  return -1;
 }
 
 function unpackArrayLiteral(source: string): string[] {
@@ -1868,7 +2716,7 @@ function formatAstNode(node: t.Node, currentIndent: string): string {
     return `{\n${entries.map((e) => `${childIndent}${e}`).join(',\n')},\n${currentIndent}}`;
   }
   if (t.isStringLiteral(node)) {
-    const stripped = node.value.replace(/<rootDir>\/?/g, './');
+    const stripped = normalizeRootDir(node.value);
     if (!stripped.includes("'") && !/[\\\n\r\t]/.test(stripped)) {
       return `'${stripped}'`;
     }
@@ -1899,8 +2747,7 @@ function formatAstNode(node: t.Node, currentIndent: string): string {
   if (t.isTemplateLiteral(node)) {
     return generate(node, { jsescOption: { quotes: 'single' } }).code;
   }
-  return generate(node, { compact: false, jsescOption: { quotes: 'single' } })
-    .code.replace(/<rootDir>\/?/g, './')
+  return normalizeRootDirInCode(generate(node, { compact: false, jsescOption: { quotes: 'single' } }).code)
     .replace(/\n\s*/g, ' ')
     .trim();
 }
